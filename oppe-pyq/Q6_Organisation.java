@@ -53,13 +53,30 @@ abstract class Employee {
 
 //********* DEFINE class Manager here
 //********* DEFINE class Director here
+class Manager extends Employee {
+    public Manager(String n, double s) {
+        super(n, s);
+    }
+    public void printBonus() {
+        System.out.println(getName() + " : " + (getSalary() * 0.10));
+    }
+}
+
+class Director extends Employee {
+    public Director(String n, double s) {
+        super(n, s);
+    }
+    public void printBonus() {
+        System.out.println(getName() + " : " + (getSalary() * 0.15));
+    }
+}
 
 public class Q6_Organisation {
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
         Employee[] eArr = new Employee[2];
-        eArr[0] = new Manager(sc.nextLine(), sc.nextDouble());
-        eArr[1] = new Director(sc.nextLine(), sc.nextDouble());
+        eArr[0] = new Manager(sc.next(), sc.nextDouble());
+        eArr[1] = new Director(sc.next(), sc.nextDouble());
         eArr[0].printBonus();
         eArr[1].printBonus();
         sc.close();

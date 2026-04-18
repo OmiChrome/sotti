@@ -42,15 +42,28 @@ class Doctor {
     private String name;
     private String department;
 
-    // Define constructor here to initialize instance variables
-    // Define toString() here
+    public Doctor(String name, String department) {
+        this.name = name;
+        this.department = department;
+    }
+
+    public String toString() {
+        return name + " " + department;
+    }
 
 }
 
 class Surgeon extends Doctor {
     private int surgeries;
-    // Define constructor here
-    // Override toString() here
+
+    public Surgeon(String name, String department, int surgeries) {
+        super(name, department);
+        this.surgeries = surgeries;
+    }
+
+    public String toString() {
+        return super.toString() + " " + surgeries;
+    }
 }
 
 public class Q15_HospitalSystem {

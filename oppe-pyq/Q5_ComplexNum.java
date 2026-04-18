@@ -30,9 +30,27 @@ import java.util.*;
  *   Input: 10 20 / 13.3 5.12 →  Output: 10.0 + 20.0i + 13.3 + 5.12i = 23.3 + 25.12i
  */
 
-// DEFINE class ComplexNum<T extends Number> here
+class ComplexNum<T extends Number> {
+    private T r;
+    private T i;
 
-class Q5_FClass {
+    public ComplexNum(T r, T i) {
+        this.r = r;
+        this.i = i;
+    }
+
+    public ComplexNum<Double> add(ComplexNum<?> c) {
+        double real = r.doubleValue() + c.r.doubleValue();
+        double imag = i.doubleValue() + c.i.doubleValue();
+        return new ComplexNum<Double>(real, imag);
+    }
+
+    public String toString() {
+        return r.doubleValue() + " + " + i.doubleValue() + "i";
+    }
+}
+
+public class Q5_ComplexNum {
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
         int n1, n2;

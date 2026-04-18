@@ -223,6 +223,13 @@ def generate_and_verify_solution(
     dl.log_ocr_images(image_paths)
     dl.log_ocr_response(ocr_model_used, raw_text, question_pack)
 
+    ocr_visual = f"// OCR Title: {title}\n"
+    cases = question_pack.get("test_cases", [])
+    if cases:
+        ocr_visual += f"// Extracted {len(cases)} test cases.\n"
+    ocr_visual += f"\n{stub_code}"
+    _emit({"type": "ocr", "block": ocr_visual})
+
     # Check solved_questions state
     if title and title in APP_STATE["solved_questions"]:
         solved_info = APP_STATE["solved_questions"][title]

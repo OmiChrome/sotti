@@ -36,9 +36,29 @@ import java.util.*;
  *   Output: Huawei takes a picture \n Huawei makes a call \n Huawei makes a call
  */
 
-// DEFINE interface MobileDevice here
-// DEFINE interface Camera here
-// DEFINE class Smartphone here
+interface MobileDevice {
+    String makeCall();
+}
+
+interface Camera {
+    String takePicture();
+}
+
+class Smartphone implements MobileDevice, Camera {
+    private String name;
+
+    public Smartphone(String name) {
+        this.name = name;
+    }
+
+    public String makeCall() {
+        return name + " makes a call";
+    }
+
+    public String takePicture() {
+        return name + " takes a picture";
+    }
+}
 
 class Q7_InterfaceTest {
     public static void main(String[] args) {

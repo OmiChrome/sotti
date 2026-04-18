@@ -363,10 +363,16 @@
     }
 
     // ── Inject code ───────────────────────────────────────────────────────────
-    function injectCode(block, hint, unverified) {
+    function injectCode(block, hint, unverified, isOcr) {
       currentRawCode = block;
 
-      if (unverified) {
+      warnLine.style.color = '';
+
+      if (isOcr) {
+        warnLine.textContent = 'ℹ OCR COMPLETE — Generating Solution...\n';
+        warnLine.style.color = '#1565C0';
+        warnLine.classList.add('visible');
+      } else if (unverified) {
         warnLine.textContent = '⚠ UNVERIFIED — compilation not confirmed\n';
         warnLine.classList.add('visible');
       } else {
@@ -402,10 +408,15 @@
           injectCode(data.block || '', data.hint, unverified);
           break;
         }
+        case 'ocr': {
+          injectCode(data.block || '', null, false, true);
+          break;
+        }
         case 'status':
           if (placeholderText) placeholderText.innerText = data.message || '';
           break;
         case 'error':
+          warnLine.style.color = '';
           warnLine.textContent = '⚠ Error: ' + (data.message || 'Unknown error') + '\n';
           warnLine.classList.add('visible');
           paneLeft.classList.remove('idle');

@@ -38,7 +38,14 @@ class Author {
     private String name;
     private String[] books;
 
-    //***** Define constructor(s) here
+    public Author(String name, String[] books) {
+        this.name = name;
+        this.books = Arrays.copyOf(books, books.length);
+    }
+
+    public Author(Author other) {
+        this(other.name, other.books);
+    }
 
     public void setName(String n) {
         name = n;

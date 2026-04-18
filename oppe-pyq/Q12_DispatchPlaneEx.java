@@ -47,11 +47,31 @@ class AirPlane {
     public AirPlane(String n) {
         model = n;
     }
-    // Write your solution here (accessor + display)
+    public String getModel() {
+        return model;
+    }
+    public void display() {
+        System.out.println("Inside an anonymous airplane");
+    }
 }
 
-// Define class Boeing here
-// Define class AirBus here
+class Boeing extends AirPlane {
+    public Boeing(String model) {
+        super(model);
+    }
+    public void display() {
+        System.out.println("Inside Boeing " + getModel());
+    }
+}
+
+class AirBus extends AirPlane {
+    public AirBus(String model) {
+        super(model);
+    }
+    public void display() {
+        System.out.println("Inside AirBus " + getModel());
+    }
+}
 
 public class Q12_DispatchPlaneEx {
     public static void main(String[] args) {

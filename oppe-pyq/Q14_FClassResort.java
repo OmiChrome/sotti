@@ -37,10 +37,21 @@ class Place {
 }
 
 public class Q14_FClassResort {
-    // Define getFinalList(Place p) here
     public static ArrayList<String> getFinalList(Place p) {
-        // YOUR CODE HERE
-        return null; // placeholder
+        ArrayList<String> finalList = new ArrayList<String>();
+        for (Map.Entry<String, ArrayList<Integer>> entry : p.getResortMap().entrySet()) {
+            boolean allGood = true;
+            for (int rating : entry.getValue()) {
+                if (rating < 4) {
+                    allGood = false;
+                    break;
+                }
+            }
+            if (allGood) {
+                finalList.add(entry.getKey());
+            }
+        }
+        return finalList;
     }
 
     public static void main(String[] args) {
