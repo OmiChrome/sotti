@@ -1,0 +1,10 @@
+FAIL
+TC1: MISMATCH
+  Input:    'Vinay Kota HR<br>Mumbai Finance'
+  Expected: 'Vinay : Mumbai : Finance, Vinay : Kota : HR'
+  Got:      ''
+
+TC2: MISMATCH
+  Input:    'Brinda Chennai Finance<br>Kolkata IT'
+  Expected: 'Brinda : Kolkata : IT, Brinda : Chennai : Finance'
+  Got:      ''

@@ -63,6 +63,28 @@ async def _check_watch_dir(watch_dir: Path) -> tuple[bool, str]:
     return True, f"WATCH_DIR                 → {watch_dir}"
 
 
+async def _check_java() -> tuple[bool, str]:
+    """Verify `java` is on PATH and is Java 11+."""
+    import subprocess
+    loop = asyncio.get_running_loop()
+
+    def _probe() -> tuple[bool, str]:
+        try:
+            r = subprocess.run(
+                ["java", "-version"],
+                capture_output=True, text=True, timeout=5, shell=False
+            )
+            # java -version writes to stderr
+            ver_line = (r.stderr or r.stdout or "").splitlines()[0] if (r.stderr or r.stdout) else ""
+            return True, f"java command            → {ver_line.strip()}"
+        except FileNotFoundError:
+            return False, "java NOT found on PATH — install JDK 11+ and add java.exe to PATH"
+        except Exception as e:
+            return False, f"java check error: {e}"
+
+    return await loop.run_in_executor(None, _probe)
+
+
 async def _check_api_and_models(
     api_key: str,
     ocr_model: str,
@@ -149,9 +171,10 @@ async def run_startup_checks(settings: "Settings") -> bool:
     print(f"\n  {_B}-- Startup Checks {'─' * 31}{_D}")
 
     try:
-        dir_result, api_results = await asyncio.wait_for(
+        dir_result, java_result, api_results = await asyncio.wait_for(
             asyncio.gather(
                 _check_watch_dir(settings.watch_dir),
+                _check_java(),
                 _check_api_and_models(
                     settings.gemini_api_key,
                     settings.ocr_model,
@@ -160,12 +183,12 @@ async def run_startup_checks(settings: "Settings") -> bool:
                 ),
                 return_exceptions=True,
             ),
-            timeout=5.0,
+            timeout=8.0,
         )
     except asyncio.TimeoutError:
-        print(_warn("Startup checks exceeded 5 s — proceeding anyway."))
+        print(_warn("Startup checks exceeded 8 s — proceeding anyway."))
         print()
-        return True  # never block startup on a slow network
+        return True
 
     all_ok = True
 
@@ -178,20 +201,31 @@ async def run_startup_checks(settings: "Settings") -> bool:
         print(_ok(msg) if ok else _fail(msg))
         all_ok &= ok
 
+    # --- java command ---
+    if isinstance(java_result, Exception):
+        print(_fail(f"java check error: {java_result}"))
+        all_ok = False
+    else:
+        ok, msg = java_result
+        print(_ok(msg) if ok else _fail(msg))
+        all_ok &= ok
+
     # --- API key + models ---
     if isinstance(api_results, Exception):
         print(_fail(f"API/model check error: {api_results}"))
         all_ok = False
     else:
         for ok, msg in api_results:
-            print(_ok(msg) if ok else _fail(msg))
-            all_ok &= ok
+            print(_ok(msg) if ok else _warn(msg))  # model missing → warn not fatal
+            # API key failure is fatal; model-not-found is a warning
+            if not ok and "API key" in msg:
+                all_ok = False
 
     print(f"  {'-' * 49}")
     if all_ok:
         print(f"  {_G}{_B}All checks passed.{_D}")
     else:
-        print(f"  {_R}{_B}One or more checks failed — review .env before use.{_D}")
+        print(f"  {_R}{_B}One or more checks failed — review .env / PATH before use.{_D}")
     print()
 
     return all_ok

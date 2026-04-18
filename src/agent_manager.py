@@ -18,7 +18,6 @@ from typing import Callable, Any
 
 from google import genai
 from google.genai import types
-from PIL import Image
 
 from .config import settings
 from . import verifier
@@ -110,29 +109,41 @@ Reply with exactly one word: NEW or DEBUG
 """
 
 _CODE_MODEL_PROMPT = """\
-You are a Java expert solving OPPE exam questions.
+You are a Java expert solving OPPE exam questions. Produce a complete, compilable Java solution.
 
-Given the question.md and orchestrator instructions, produce a compilable Java solution.
+REQUIRED OUTPUT FORMAT (markdown, no deviation):
 
-Output STRICT JSON with exactly two keys:
-  "block"     — ONLY the code to type into the stub placeholder (no class shell unless stub is empty)
-  "full_file" — Complete compilable Java file. Class must be named Solution. Use `java Solution.java` format (Java 11+).
+## BLOCK
+<code that fills the stub placeholder ONLY — no surrounding class/method shell>
+
+## FULL SOLUTION
+```java
+<complete compilable Java file, class named Solution, runs with `java Solution.java`>
+```
 
 Rules:
-- Return ONLY the JSON. No markdown. No explanation.
-- full_file MUST compile with `java Solution.java`.
-- Keep it minimal: inline lambdas, compact loops, one-liners where readable.
-- Match exact output format from test cases (spacing, punctuation).
+- Output ONLY this markdown. No explanation, no extra text.
+- FULL SOLUTION must compile+run with `java Solution.java` (Java 11+).
+- Match test case output exactly (spacing, punctuation, newlines).
+- Compact code: one-liners, inline where readable.
 """
 
 _CODE_FIX_PROMPT = """\
-Your previous solution failed. Fix it.
+Your solution failed verification. Fix ONLY the error below.
 
 Error:
 {error}
 
-Return ONLY the JSON with "block" and "full_file". No explanation.
+Output the same markdown format:
+## BLOCK
+<fixed stub code>
+
+## FULL SOLUTION
+```java
+<fixed complete file>
+```
 """
+
 
 # ---------------------------------------------------------------------------
 # Gemini client (lazy, with fallback)
@@ -181,7 +192,7 @@ def _call(model: str, contents: list, system: str, json_out: bool = False, tempe
 
 BroadcastFn = Callable[[dict], None]
 
-_MAX_RETRIES = 3
+_MAX_RETRIES = 2
 
 
 def _emit(broadcast: BroadcastFn | None, payload: dict) -> None:
@@ -199,17 +210,36 @@ def _slug(text: str, max_len: int = 48) -> str:
     return text[:max_len] or "unknown"
 
 
-def _load_images(image_paths: list[str]) -> list[Image.Image]:
-    images: list[Image.Image] = []
+_MIME_MAP = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+}
+
+
+def _load_image_parts(image_paths: list[str]) -> list[types.Part]:
+    """
+    Load images as types.Part.from_bytes() with correct MIME types.
+    This is the recommended approach per Gemini image understanding docs
+    (inline data, <20MB per request).
+    """
+    parts: list[types.Part] = []
     for p in image_paths:
         path = Path(p)
-        if path.exists():
-            images.append(Image.open(path))
-        else:
+        if not path.exists():
             log.warning("Image not found, skipping: %s", p)
-    if not images:
+            continue
+        mime = _MIME_MAP.get(path.suffix.lower(), "image/jpeg")
+        parts.append(types.Part.from_bytes(
+            data=path.read_bytes(),
+            mime_type=mime,
+        ))
+    if not parts:
         raise RuntimeError("No valid images in batch.")
-    return images
+    return parts
 
 
 def _question_dir(title: str) -> Path:
@@ -227,10 +257,12 @@ def _phase_ocr(image_paths: list[str], broadcast: BroadcastFn | None) -> tuple[s
     _emit(broadcast, {"type": "status", "message": "OCR in progress…"})
     t0 = time.monotonic()
 
-    images = _load_images(image_paths)
-    contents: list = images + [
-        "Extract the question pack from these exam screenshots. "
-        "Output ONLY the markdown as instructed — no extra text."
+    img_parts = _load_image_parts(image_paths)
+    contents: list = img_parts + [
+        types.Part.from_text(
+            "Extract the question pack from these exam screenshots. "
+            "Output ONLY the markdown as instructed — no extra text."
+        )
     ]
 
     raw = _call(settings.ocr_model, contents, _OCR_PROMPT, json_out=False, temperature=0.05)
@@ -279,10 +311,13 @@ def _phase_orchestrate_new(question_md: str) -> str:
 # Phase B — Orchestrator (debug path)
 # ---------------------------------------------------------------------------
 
-def _phase_orchestrate_debug(images: list[Image.Image]) -> str:
+def _phase_orchestrate_debug(image_paths: list[str]) -> str:
     """Returns extracted error text + cause from a debug screenshot."""
     t0 = time.monotonic()
-    contents: list = images + ["Analyze the debug output in this screenshot."]
+    img_parts = _load_image_parts(image_paths)
+    contents: list = img_parts + [
+        types.Part.from_text("Analyze the debug output in this screenshot.")
+    ]
     result = _call(settings.orchestrator_model, contents, _ORCHESTRATOR_DEBUG_PROMPT, json_out=False, temperature=0.05)
     log.info("[ORCH-DEBUG] error extracted in %.1fs", time.monotonic() - t0)
     return result
@@ -291,12 +326,13 @@ def _phase_orchestrate_debug(images: list[Image.Image]) -> str:
 # Image classification (single image: new question or debug?)
 # ---------------------------------------------------------------------------
 
-def _classify_image(image: Image.Image) -> str:
-    """Returns 'NEW' or 'DEBUG'."""
+def _classify_image(image_paths: list[str]) -> str:
+    """Returns 'NEW' or 'DEBUG'. Passes first image as Part.from_bytes."""
     t0 = time.monotonic()
+    img_parts = _load_image_parts(image_paths[:1])  # only need first image to classify
     result = _call(
         settings.orchestrator_model,
-        [image, "Is this a full coding question or a debug window?"],
+        img_parts + [types.Part.from_text("Is this a full coding question or a debug window?")],
         _ORCHESTRATOR_CLASSIFY_PROMPT,
         json_out=False,
         temperature=0.0,
@@ -309,6 +345,33 @@ def _classify_image(image: Image.Image) -> str:
 # ---------------------------------------------------------------------------
 # Phase C — Code generation + verification loop
 # ---------------------------------------------------------------------------
+
+def _parse_code_response(raw: str) -> tuple[str, str]:
+    """
+    Parse the markdown response from CODE_MODEL.
+    Returns (block, full_file). Both may be empty string on failure.
+    """
+    block = ""
+    full_file = ""
+
+    # Extract FULL SOLUTION java block — handles newline(s) between heading and fence
+    full_match = re.search(
+        r"##\s*FULL\s+SOLUTION\s*\n\s*```java\s*\n(.*?)```",
+        raw, re.DOTALL | re.IGNORECASE
+    )
+    if full_match:
+        full_file = full_match.group(1).strip()
+
+    # Extract BLOCK section — everything between ## BLOCK and the next ## heading or fence
+    block_match = re.search(
+        r"##\s*BLOCK\s*\n(.*?)(?=\n\s*##|\n\s*```|\Z)",
+        raw, re.DOTALL | re.IGNORECASE
+    )
+    if block_match:
+        block = block_match.group(1).strip()
+
+    return block, full_file
+
 
 def _parse_test_cases(question_md: str) -> list[dict]:
     """Extract test cases from question.md table."""
@@ -340,11 +403,9 @@ def _phase_code_gen(
     extra_context: str = "",
 ) -> dict:
     """
-    Runs the code-gen + verify loop.
-    Returns {"block": str, "hint": str, "verified": bool}.
+    Code-gen + verify loop. Returns {"block", "hint", "verified"}.
+    Output format: markdown with ## BLOCK and ## FULL SOLUTION sections.
     """
-    import json
-
     test_cases = _parse_test_cases(question_md)
     log.info("[CODE] %d test case(s) extracted", len(test_cases))
 
@@ -353,8 +414,8 @@ def _phase_code_gen(
         f"## Orchestrator Instructions\n{orch_instructions}\n"
     )
     if extra_context:
-        user_msg += f"\n## Additional Context\n{extra_context}\n"
-    user_msg += "\nSolve it. Return ONLY the strict JSON."
+        user_msg += f"\n## Context\n{extra_context}\n"
+    user_msg += "\nSolve it. Output the required markdown."
 
     history: list[types.Content] = []
     last_block = ""
@@ -362,35 +423,30 @@ def _phase_code_gen(
     verified = False
 
     for attempt in range(1, _MAX_RETRIES + 1):
-        _emit(broadcast, {"type": "status", "message": f"Code gen attempt {attempt}/{_MAX_RETRIES}…"})
+        _emit(broadcast, {"type": "status", "message": f"Code gen {attempt}/{_MAX_RETRIES}…"})
         log.info("[CODE] attempt %d/%d", attempt, _MAX_RETRIES)
         t_a = time.monotonic()
 
-        prompt = user_msg if attempt == 1 else _CODE_FIX_PROMPT.format(error=last_hint)
+        prompt = user_msg if attempt == 1 else _CODE_FIX_PROMPT.format(error=last_hint[:600])
         current = list(history) + [
             types.Content(role="user", parts=[types.Part(text=prompt)])
         ]
 
         try:
-            raw = _call(settings.code_model, current, _CODE_MODEL_PROMPT, json_out=True, temperature=0.15)
+            raw = _call(settings.code_model, current, _CODE_MODEL_PROMPT, json_out=False, temperature=0.1)
         except Exception as e:
             log.warning("[CODE] API error attempt %d: %s", attempt, e)
             last_hint = str(e)
             continue
 
-        log.info("[CODE] model responded in %.1fs", time.monotonic() - t_a)
+        log.info("[CODE] responded in %.1fs", time.monotonic() - t_a)
+        (q_dir / f"attempt_{attempt}_raw.md").write_text(raw, encoding="utf-8")
 
-        # Save attempt response
-        (q_dir / f"attempt_{attempt}_response.json").write_text(raw, encoding="utf-8")
+        block, full_file = _parse_code_response(raw)
 
-        try:
-            solution = json.loads(raw)
-            block: str = solution.get("block", "")
-            full_file: str = solution.get("full_file", "")
-        except Exception as exc:
-            log.warning("[CODE] JSON parse error: %s", exc)
-            last_block = raw
-            last_hint = f"JSON parse error: {exc}\nRaw: {raw[:200]}"
+        if not full_file:
+            last_hint = f"Could not parse FULL SOLUTION section. Raw output was:\n{raw[:400]}"
+            log.warning("[CODE] parse failed attempt %d", attempt)
             _append_history(history, "model", raw)
             _append_history(history, "user", _CODE_FIX_PROMPT.format(error=last_hint))
             (q_dir / f"attempt_{attempt}_verify.txt").write_text(f"FAIL\n{last_hint}", encoding="utf-8")
@@ -398,35 +454,31 @@ def _phase_code_gen(
 
         last_block = block
 
-        if not full_file:
-            last_hint = "full_file was empty."
-            (q_dir / f"attempt_{attempt}_verify.txt").write_text(f"FAIL\n{last_hint}", encoding="utf-8")
-            _append_history(history, "model", raw)
-            _append_history(history, "user", _CODE_FIX_PROMPT.format(error=last_hint))
-            continue
+        # Write files: full_solution.java (for `java` runner) and solution.md (block for portal)
+        (q_dir / "full_solution.java").write_text(full_file, encoding="utf-8")
+        (q_dir / "solution.md").write_text(
+            f"# Solution Block\n\n```java\n{block}\n```\n", encoding="utf-8"
+        )
 
-        # Write Solution.java to question directory
-        (q_dir / "Solution.java").write_text(full_file, encoding="utf-8")
-
-        # Verify
+        # Verify with java command
         t_v = time.monotonic()
         ok, output = verifier.verify_java_code(full_file, work_dir=q_dir, test_cases=test_cases)
-        log.info("[VERIFY] attempt %d: %s (%.1fs)", attempt, "PASS" if ok else "FAIL", time.monotonic() - t_v)
+        log.info("[VERIFY] %s (%.1fs)", "PASS" if ok else "FAIL", time.monotonic() - t_v)
         (q_dir / f"attempt_{attempt}_verify.txt").write_text(
             f"{'PASS' if ok else 'FAIL'}\n{output}", encoding="utf-8"
         )
 
         if ok:
             verified = True
-            last_hint = f"✓ Verified | {APP_STATE.get('current_question_title', '')} | {len(test_cases)} test case(s)"
+            last_hint = f"\u2713 Verified | {APP_STATE.get('current_question_title', '')} | {len(test_cases)} TC"
             break
         else:
             last_hint = output
             _append_history(history, "model", raw)
-            _append_history(history, "user", _CODE_FIX_PROMPT.format(error=output[:800]))
+            _append_history(history, "user", _CODE_FIX_PROMPT.format(error=output[:600]))
 
     if not verified:
-        last_hint = "⚠ Unverified — " + last_hint[:200]
+        last_hint = "\u26a0 Unverified \u2014 " + last_hint[:200]
 
     # Persist state
     APP_STATE["current"] = last_block
@@ -437,16 +489,11 @@ def _phase_code_gen(
         APP_STATE["solved_questions"][title] = {"block": last_block, "stub_code": stub_code}
     save_state()
 
-    # Write summary
-    summary = {
-        "title": title,
-        "verified": verified,
-        "attempts": _MAX_RETRIES,
-        "hint": last_hint,
-        "block_chars": len(last_block),
-    }
     import json as _json
-    (q_dir / "session_summary.json").write_text(_json.dumps(summary, indent=2), encoding="utf-8")
+    (q_dir / "session_summary.json").write_text(_json.dumps({
+        "title": title, "verified": verified,
+        "attempts": _MAX_RETRIES, "hint": last_hint,
+    }, indent=2), encoding="utf-8")
 
     return {"block": last_block, "hint": last_hint, "verified": verified}
 
@@ -534,9 +581,8 @@ def process_debug_screenshot(
 
     question_md = question_md_path.read_text(encoding="utf-8")
 
-    # Extract error from debug screenshot
-    images = _load_images(image_paths)
-    error_analysis = _phase_orchestrate_debug(images)
+    # Extract error from debug screenshot (passes image_paths directly)
+    error_analysis = _phase_orchestrate_debug(image_paths)
     log.info("[DEBUG] Error analysis:\n%s", error_analysis[:300])
 
     # Reload orchestrator plan if available
@@ -564,10 +610,9 @@ def classify_and_route(
     Entry point for SINGLE image batches.
     Orchestrator decides NEW vs DEBUG, then routes appropriately.
     """
-    images = _load_images(image_paths)
     _emit(broadcast, {"type": "status", "message": "Classifying image…"})
 
-    decision = _classify_image(images[0])
+    decision = _classify_image(image_paths)
 
     if decision == "DEBUG" and APP_STATE.get("current_question_dir"):
         return process_debug_screenshot(image_paths, broadcast)
