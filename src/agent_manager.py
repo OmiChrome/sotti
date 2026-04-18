@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable
 
 from google import genai
 from google.genai import types
@@ -259,10 +259,8 @@ def _phase_ocr(image_paths: list[str], broadcast: BroadcastFn | None) -> tuple[s
 
     img_parts = _load_image_parts(image_paths)
     contents: list = img_parts + [
-        types.Part.from_text(
-            "Extract the question pack from these exam screenshots. "
-            "Output ONLY the markdown as instructed — no extra text."
-        )
+        "Extract the question pack from these exam screenshots. "
+        "Output ONLY the markdown as instructed — no extra text."
     ]
 
     raw = _call(settings.ocr_model, contents, _OCR_PROMPT, json_out=False, temperature=0.05)
@@ -315,9 +313,7 @@ def _phase_orchestrate_debug(image_paths: list[str]) -> str:
     """Returns extracted error text + cause from a debug screenshot."""
     t0 = time.monotonic()
     img_parts = _load_image_parts(image_paths)
-    contents: list = img_parts + [
-        types.Part.from_text("Analyze the debug output in this screenshot.")
-    ]
+    contents: list = img_parts + ["Analyze the debug output in this screenshot."]
     result = _call(settings.orchestrator_model, contents, _ORCHESTRATOR_DEBUG_PROMPT, json_out=False, temperature=0.05)
     log.info("[ORCH-DEBUG] error extracted in %.1fs", time.monotonic() - t0)
     return result
@@ -332,7 +328,7 @@ def _classify_image(image_paths: list[str]) -> str:
     img_parts = _load_image_parts(image_paths[:1])  # only need first image to classify
     result = _call(
         settings.orchestrator_model,
-        img_parts + [types.Part.from_text("Is this a full coding question or a debug window?")],
+        img_parts + ["Is this a full coding question or a debug window?"],
         _ORCHESTRATOR_CLASSIFY_PROMPT,
         json_out=False,
         temperature=0.0,
