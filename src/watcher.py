@@ -1,7 +1,8 @@
 """
-watcher.py — Sotti Phase 2
+watcher.py — Sotti Phase 6
 Monitors the configured screenshots folder, batches images after the settle
 period, then hands the sealed pack to the AI agent manager.
+Broadly emits status updates for the UI ticker.
 """
 
 import asyncio
@@ -92,10 +93,17 @@ class ScreenshotHandler(FileSystemEventHandler):
             names,
         )
 
+        msg = f"Sending batch of {count} image{'s' if count != 1 else ''}..."
+
         # Schedule the async pipeline on the uvicorn event loop.
         asyncio.run_coroutine_threadsafe(
-            _process_pack(image_paths), self._loop
+            self._broadcast_and_process(msg, image_paths), self._loop
         )
+
+    async def _broadcast_and_process(self, msg: str, image_paths: list[str]) -> None:
+        from .main import manager
+        await manager.broadcast({"type": "status", "message": msg})
+        await _process_pack(image_paths)
 
 
 # ---------------------------------------------------------------------------
@@ -103,26 +111,37 @@ class ScreenshotHandler(FileSystemEventHandler):
 # ---------------------------------------------------------------------------
 
 async def _process_pack(image_paths: list[str]) -> None:
-    """Call the agent manager and broadcast the result via WebSocket."""
-    # Import here to avoid circular dependency at module load time.
-    from .agent_manager import extract_question_pack
+    """
+    Passes paths to generate_and_verify_solution directly, avoiding split phases.
+    """
+    from .agent_manager import generate_and_verify_solution
     from .main import manager
 
-    log.info("Sending pack to agent: %s", [Path(p).name for p in image_paths])
+    log.info("Processing pack: %s", [Path(p).name for p in image_paths])
 
     try:
-        # Run the synchronous Gemini call in a thread pool so we don't
-        # block the event loop.
         loop = asyncio.get_running_loop()
-        json_str = await loop.run_in_executor(
-            None, extract_question_pack, image_paths
+
+        solution = await loop.run_in_executor(
+            None,
+            generate_and_verify_solution,
+            image_paths,
+            manager.broadcast,   # Pass the async broadcast fn for live status updates
         )
-        await manager.broadcast(json_str)
-        log.info("Broadcast complete.")
+
+        if solution:
+            await manager.broadcast({
+                "type": "solution",
+                "block": solution["block"],
+                "hint": solution["hint"],
+            })
+
+        await manager.broadcast({"type": "status", "message": "Waiting for images..."})
+
     except Exception as exc:
-        error_payload = f'{{"error": "{exc}"}}'
-        log.error("Agent error: %s", exc)
-        await manager.broadcast(error_payload)
+        log.error("Pipeline error: %s", exc, exc_info=True)
+        await manager.broadcast({"type": "error", "message": str(exc)})
+        await manager.broadcast({"type": "status", "message": "Waiting for images..."})
 
 
 # ---------------------------------------------------------------------------

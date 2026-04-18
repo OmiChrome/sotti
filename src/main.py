@@ -1,5 +1,5 @@
 """
-main.py — Sotti Phase 2
+main.py — Sotti Phase 5
 FastAPI server: serves the static frontend, hosts the WebSocket push
 channel, and wires the watcher daemon into the asyncio event loop.
 """
@@ -13,6 +13,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from .watcher import start_watcher
+from .state import APP_STATE
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -51,7 +52,7 @@ async def root():
 # ---------------------------------------------------------------------------
 
 class ConnectionManager:
-    """Tracks active WebSocket connections and broadcasts to all of them."""
+    """Tracks active WebSocket connections and broadcasts typed dicts to all."""
 
     def __init__(self) -> None:
         self._connections: list[WebSocket] = []
@@ -61,16 +62,32 @@ class ConnectionManager:
         self._connections.append(ws)
         log.info("Frontend connected  (total: %d)", len(self._connections))
 
+        # Immediately hydrate the new client with the current global state.
+        try:
+            await ws.send_json({"type": "init", "state": APP_STATE})
+        except Exception as exc:
+            log.warning("Could not send init state to new client: %s", exc)
+
     def disconnect(self, ws: WebSocket) -> None:
-        self._connections.remove(ws)
+        try:
+            self._connections.remove(ws)
+        except ValueError:
+            pass
         log.info("Frontend disconnected (total: %d)", len(self._connections))
 
-    async def broadcast(self, message: str) -> None:
+    async def broadcast(self, payload: dict) -> None:
+        """Broadcast a typed dict to every connected client."""
+        dead: list[WebSocket] = []
         for ws in list(self._connections):
             try:
-                await ws.send_text(message)
+                await ws.send_json(payload)
             except Exception:
+                dead.append(ws)
+        for ws in dead:
+            try:
                 self._connections.remove(ws)
+            except ValueError:
+                pass
 
 
 manager = ConnectionManager()
@@ -81,7 +98,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     await manager.connect(ws)
     try:
         while True:
-            # Keep the connection alive; the server pushes, client just listens.
+            # Server is push-only; keep the connection alive.
             await ws.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(ws)
