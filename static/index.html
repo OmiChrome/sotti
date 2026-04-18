@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sotti</title>
+  <meta name="description" content="Sotti — local screenshot-to-code pipeline dashboard." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap"
+        rel="stylesheet" />
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100vw;
+      min-height: 100vh;
+      background-color: #ffffff;
+      color: #000000;
+      font-family: 'Fira Code', 'Roboto Mono', monospace;
+      font-size: 2rem;
+      white-space: pre-wrap;
+      overflow-x: hidden;
+    }
+
+    #output {
+      display: block;
+      width: 100vw;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    /* Blinking cursor */
+    #output::after {
+      content: '▍';
+      display: inline-block;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0; }
+    }
+
+    /* Status badge */
+    #status {
+      position: fixed;
+      top: 1rem;
+      right: 1.5rem;
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      opacity: 0.45;
+    }
+    #status.connected  { color: #000; }
+    #status.disconnected { color: #888; }
+  </style>
+</head>
+<body>
+  <span id="status" class="disconnected">● OFFLINE</span>
+  <pre id="output">Waiting for Sotti...</pre>
+
+  <script>
+    const output = document.getElementById('output');
+    const statusEl = document.getElementById('status');
+
+    /**
+     * Try to pretty-print JSON; fall back to raw string if it's not valid JSON.
+     */
+    function render(text) {
+      try {
+        const obj = JSON.parse(text);
+        return JSON.stringify(obj, null, 2);
+      } catch {
+        return text;
+      }
+    }
+
+    function connect() {
+      const ws = new WebSocket(`ws://${location.host}/ws`);
+
+      ws.onopen = () => {
+        statusEl.textContent = '● LIVE';
+        statusEl.className = 'connected';
+      };
+
+      ws.onmessage = (event) => {
+        // Each message replaces the current content (one pack at a time).
+        output.textContent = render(event.data);
+      };
+
+      ws.onclose = () => {
+        statusEl.textContent = '● OFFLINE — reconnecting…';
+        statusEl.className = 'disconnected';
+        setTimeout(connect, 3000);
+      };
+
+      ws.onerror = (err) => {
+        console.error('[Sotti] WebSocket error:', err);
+        ws.close();
+      };
+    }
+
+    connect();
+  </script>
+</body>
+</html>
