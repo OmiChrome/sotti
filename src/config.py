@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     @field_validator("watch_dir", mode="before")
     @classmethod
     def normalise_watch_dir(cls, v: object) -> object:
-        """
+        r"""
         Accepts both quoted and unquoted Windows paths with spaces, e.g.:
             WATCH_DIR=C:\Users\omi\My Screenshots
             WATCH_DIR="C:\Users\omi\My Screenshots"

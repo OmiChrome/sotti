@@ -132,7 +132,14 @@ async def _process_pack(image_paths: list[str], loop: asyncio.AbstractEventLoop)
     t_start = time.monotonic()
 
     def _sync_broadcast(payload: dict) -> None:
-        """Thread-safe shim: schedules a coroutine on the asyncio loop."""
+        """Thread-safe shim: schedules a coroutine on the asyncio loop.
+        Guards against 'Event loop is closed' by checking is_running() first.
+        If the loop is gone (e.g. uvicorn --reload triggered a restart), we
+        log and skip — never create an orphaned coroutine object.
+        """
+        if not loop.is_running():
+            log.debug("_sync_broadcast: loop not running, skipping payload type=%s", payload.get("type"))
+            return
         asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
 
     try:

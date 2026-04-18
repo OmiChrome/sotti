@@ -18,6 +18,7 @@ from PIL import Image
 from .config import settings
 from . import verifier
 from .state import APP_STATE, save_state
+from .data_logger import DataLogger
 
 log = logging.getLogger(__name__)
 
@@ -138,7 +139,7 @@ def generate_and_verify_solution(
     import asyncio
 
     def _emit(payload: dict) -> None:
-        """Fire-and-forget: directly call the sync broadcast shim."""
+        """Fire-and-forget sync shim. Guards against closed/stopped event loop."""
         if broadcast is None:
             return
         try:
@@ -164,6 +165,10 @@ def generate_and_verify_solution(
     if not parts:
         raise RuntimeError("No valid images could be loaded from the batch.")
 
+    # Initialise DataLogger with a temporary title; renamed after OCR extracts the real one.
+    dl = DataLogger(title="ocr-pending")
+    dl.log_ocr_images(image_paths)
+
     parts.append(
         "Extract the question pack from the screenshot(s) above. "
         "Return ONLY the JSON object — no markdown fences, no extra text."
@@ -173,8 +178,9 @@ def generate_and_verify_solution(
 
     try:
         t_api = time.monotonic()
+        ocr_model_used = settings.orchestrator_model
         response = _generate_with_fallback(
-            model=settings.orchestrator_model,
+            model=ocr_model_used,
             contents=parts,
             config=types.GenerateContentConfig(
                 system_instruction=_ORCHESTRATOR_SYSTEM_PROMPT,
@@ -188,8 +194,9 @@ def generate_and_verify_solution(
                     settings.orchestrator_model, time.monotonic() - t_api, e, settings.sub_agent_model)
         _emit({"type": "status", "message": f"OCR fallback, using {settings.sub_agent_model}..."})
         t_api = time.monotonic()
+        ocr_model_used = settings.sub_agent_model
         response = _generate_with_fallback(
-            model=settings.sub_agent_model,
+            model=ocr_model_used,
             contents=parts,
             config=types.GenerateContentConfig(
                 system_instruction=_ORCHESTRATOR_SYSTEM_PROMPT,
@@ -210,6 +217,11 @@ def generate_and_verify_solution(
     stub_code = question_pack.get("stub_code", "")
     log.info("  [OCR] Extracted title=%r  stub_code_len=%d  elapsed=%.1fs",
              title, len(stub_code), time.monotonic() - t0)
+
+    # Re-create DataLogger now that we have the real title for a readable folder name.
+    dl = DataLogger(title=title or "unknown")
+    dl.log_ocr_images(image_paths)
+    dl.log_ocr_response(ocr_model_used, raw_text, question_pack)
 
     # Check solved_questions state
     if title and title in APP_STATE["solved_questions"]:
@@ -248,6 +260,13 @@ def generate_and_verify_solution(
             )
         ]
 
+        # Log the request (snapshot the text parts only — images are already logged)
+        dl.log_gen_request(
+            attempt,
+            settings.sub_agent_model,
+            [p.text for c in current_contents for p in c.parts if hasattr(p, "text") and p.text],
+        )
+
         response = _generate_with_fallback(
             model=settings.sub_agent_model,
             contents=current_contents,
@@ -269,11 +288,14 @@ def generate_and_verify_solution(
             log.warning("Sub-agent returned non-JSON on attempt %d: %s", attempt, exc)
             last_block = raw_text
             last_hint = f"JSON parse error: {exc}"
+            dl.log_gen_response(attempt, raw_text, None)
+            dl.log_verify_result(attempt, False, f"JSON parse error: {exc}")
             _append_to_history(history, role="model", text=raw_text)
             _append_to_history(history, role="user", text=_fix_prompt(last_stderr=last_hint))
             continue
 
         last_block = block
+        dl.log_gen_response(attempt, raw_text, {"block": block, "full_file": full_file})
 
         log.info("  [VERIFY] Attempt %d/%d — compiling full_file (%d chars)...",
                  attempt, _MAX_RETRIES, len(full_file))
@@ -283,6 +305,8 @@ def generate_and_verify_solution(
             ok, output = verifier.verify_java_code(full_file)
         else:
             ok, output = False, "full_file was empty; cannot verify."
+
+        dl.log_verify_result(attempt, ok, output)
 
         if ok:
             log.info("  [VERIFY] PASSED on attempt %d in %.1fs", attempt, time.monotonic() - t_verify)
@@ -312,6 +336,8 @@ def generate_and_verify_solution(
             }
         save_state()
 
+    dl.log_final(last_block, last_hint, verified)
+    log.info("  [DATA] Session saved → %s", dl.session_dir)
     return {"block": last_block, "hint": last_hint}
 
 

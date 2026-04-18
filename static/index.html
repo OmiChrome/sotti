@@ -2,19 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes" />
   <title>Sotti — Java Assistant</title>
-  
-  <!-- Prism.js — GHColors theme -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-ghcolors.css" />
+
+  <!-- Fira Code from Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap" rel="stylesheet" />
 
   <style>
-    /* ── Reset ──────────────────────────────────────────────────────── */
-    *, *::before, *::after {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    /* ── Reset ──────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     html, body {
       width: 100vw;
@@ -22,130 +20,377 @@
       overflow: hidden;
       background: #ffffff;
       color: #000000;
-      font-family: 'Fira Code', 'Consolas', monospace;
+      font-family: 'Fira Code', 'Roboto Mono', 'Consolas', monospace;
     }
 
-    /* ── PIP-safe bounding box (Phase 3.5) ───────────────────────────
-       60vw × 70vh in the top-left; bottom-right stays clear for PIP.  */
-    #pip-safe-zone {
-      width: 60vw;
-      height: 70vh;
+    /* ── Wrapper that holds one or two panes ─────────────────────────────
+       In single-pane mode: one full-width pane.
+       In dual-pane mode:   two 50 vw panes side by side.                  */
+    #pane-wrapper {
+      display: flex;
+      width: 100vw;
+      height: calc(100vh - 36px);   /* 36px reserved for status bar */
       overflow: hidden;
-      position: absolute;
-      top: 0;
-      left: 0;
+      transition: none;
     }
 
-    #pip-safe-zone pre {
+    /* ── Each pane ───────────────────────────────────────────────────────  */
+    .pane {
+      height: 100%;
+      overflow: hidden;
+      padding: 8px 12px;
+      flex-shrink: 0;
+    }
+
+    /* Single-pane default: full width */
+    #pane-left  { width: 100vw; }
+    #pane-right { width: 50vw;  display: none; border-left: 2px solid #e0e0e0; }
+
+    /* Dual-pane mode activated by JS */
+    #pane-wrapper.dual #pane-left  { width: 50vw; }
+    #pane-wrapper.dual #pane-right { display: block; }
+
+    /* PIP-safe overlay (bottom-right corner of the right pane).
+       Covers ~34 % wide × 22 % tall — enough for a typical 320×180px PIP.  */
+    #pane-right { position: relative; }
+    #pane-right::after {
+      content: '';
+      position: absolute;
+      bottom: 0; right: 0;
+      width: 34%; height: 22%;
+      background: #ffffff;
+      z-index: 10;
+      pointer-events: none;
+    }
+    /* In single-pane mode the PIP corner is on the right pane which is hidden,
+       so the single pane itself needs a PIP clearance on its own bottom-right. */
+    #pane-left.pip-safe::after {
+      content: '';
+      position: absolute;
+      bottom: 0; right: 0;
+      width: 22%; height: 22%;
+      background: #ffffff;
+      z-index: 10;
+      pointer-events: none;
+    }
+    #pane-left { position: relative; }
+
+    /* ── Code pre inside each pane ──────────────────────────────────────── */
+    .code-pre {
       display: block;
       width: 100%;
       height: 100%;
-      margin: 0;
-      padding: 0.5rem;
-      background: #ffffff !important;
-      border: none !important;
-      box-shadow: none !important;
-      text-shadow: none !important;
-      text-align: left;
+      margin: 0; padding: 0;
+      background: transparent;
+      border: none;
       white-space: pre-wrap;
-      word-wrap: break-word;
+      word-break: break-word;
       overflow: hidden;
-      font-family: 'Fira Code', 'Consolas', monospace;
-      line-height: 1.45;
+      font-family: 'Fira Code', 'Roboto Mono', 'Consolas', monospace;
+      font-size: 2rem;      /* default; overridden by autoFit */
+      line-height: 1.5;
+      color: #000000;
     }
 
-    #pip-safe-zone pre code {
-      background: #ffffff !important;
-      font-family: inherit !important;
-      font-size: inherit !important;
-      line-height: inherit !important;
-      text-align: left;
-      white-space: pre-wrap !important;
-      word-wrap: break-word !important;
-    }
+    /* ── Java syntax token colours ───────────────────────────────────────  */
+    .k { color: #000080; font-weight: bold; }   /* keyword      */
+    .s { color: #006400; }                        /* string       */
+    .t { color: #4B0082; font-weight: bold; }   /* type/class   */
+    .c { color: #333333; font-style: italic; }  /* comment      */
+    .n { color: #8B4513; }                       /* number       */
+    .a { color: #1565C0; }                       /* annotation   */
 
-    /* ── Prism token overrides (Phase 3.5) ───────────────────────── */
-    .token.keyword   { color: #000080 !important; font-weight: bold !important; }
-    .token.string    { color: #006400 !important; }
-    .token.class-name,
-    .token.type      { color: #4B0082 !important; font-weight: bold !important; }
-    .token.comment   { color: #333333 !important; font-style: italic !important; }
-
-    /* ── Inline unverified / error warning ───────────────────────── */
-    #warn-line {
-      display: none;
-      color: #d32f2f;
-      font-weight: bold;
-      font-family: inherit;
-      font-size: inherit;
-      line-height: inherit;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-    }
-    #warn-line.visible { display: block; }
-
-    /* ── Blinking cursor (idle) ──────────────────────────────────── */
-    #output.idle::after {
+    /* ── Blinking cursor (idle) ─────────────────────────────────────────── */
+    #pane-left.idle::after {
       content: '▍';
+      position: static;
       display: inline-block;
       animation: blink 1s step-end infinite;
       color: #000080;
+      background: none;
+      width: auto; height: auto;
     }
     @keyframes blink {
       0%, 100% { opacity: 1; }
       50%       { opacity: 0; }
     }
 
-    /* ── Minimal status ticker (Phase 6) ─────────────────────────── */
-    #status-ticker {
-      position: fixed;
-      bottom: 10px;
-      left: 10px;
-      font-family: monospace;
-      font-size: 1rem;
-      color: #555;
+    /* ── Warn line ───────────────────────────────────────────────────────── */
+    #warn-line {
+      display: none;
+      color: #d32f2f;
+      font-weight: bold;
+      font-family: inherit;
+      white-space: pre-wrap;
     }
+    #warn-line.visible { display: block; }
+
+    /* ── Status bar ──────────────────────────────────────────────────────── */
+    #status-bar {
+      position: fixed;
+      bottom: 0; left: 0;
+      width: 100vw; height: 36px;
+      background: #f5f5f5;
+      border-top: 1px solid #ddd;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 16px;
+      z-index: 20;
+    }
+    #status-ticker  { font-family: monospace; font-size: 0.85rem; color: #555; flex: 1; }
+    #layout-badge   { font-family: monospace; font-size: 0.75rem; color: #aaa; }
+    #font-size-badge { font-family: monospace; font-size: 0.75rem; color: #999; }
   </style>
 </head>
 <body>
 
-  <!-- CENTER — Phase 3.5 pip-safe-zone -->
-  <div id="pip-safe-zone">
-    <pre id="output" class="idle"><span id="warn-line" role="alert"></span><code id="code-block" class="language-java">Waiting for Sotti…</code></pre>
+  <div id="pane-wrapper">
+    <!-- Left / primary pane -->
+    <div id="pane-left" class="pane idle pip-safe">
+      <pre id="code-left" class="code-pre"><span id="warn-line" role="alert"></span>Waiting for Sotti…</pre>
+    </div>
+    <!-- Right / overflow pane (hidden until dual-pane is activated) -->
+    <div id="pane-right" class="pane">
+      <pre id="code-right" class="code-pre"></pre>
+    </div>
   </div>
 
-  <div id="status-ticker">Waiting for images...</div>
-
-  <!-- Prism.js core + autoloader -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+  <!-- Status bar -->
+  <div id="status-bar">
+    <span id="status-ticker">Waiting for images…</span>
+    <span id="layout-badge">single</span>
+    <span id="font-size-badge">–</span>
+  </div>
 
   <script>
-    // ── DOM refs ─────────────────────────────────────────────────────────
-    const pipBox       = document.getElementById('pip-safe-zone');
-    const outputPre    = document.getElementById('output');
-    const codeBlock    = document.getElementById('code-block');
+    // ── Constants ────────────────────────────────────────────────────────────
+    // Minimum readable font size (px) for a 6-inch phone held at reading distance.
+    // Below this we switch to dual-pane mode instead of shrinking further.
+    const MIN_READABLE_PX = 14;
+    const MAX_FONT_PX     = 64;
+    const CHAR_W_RATIO    = 0.605;   // Fira Code: char width ≈ 0.605 × fontSize
+    const LINE_H_RATIO    = 1.5;     // line-height
+
+    // ── DOM refs ─────────────────────────────────────────────────────────────
+    const wrapper      = document.getElementById('pane-wrapper');
+    const paneLeft     = document.getElementById('pane-left');
+    const paneRight    = document.getElementById('pane-right');
+    const codeLeft     = document.getElementById('code-left');
+    const codeRight    = document.getElementById('code-right');
     const warnLine     = document.getElementById('warn-line');
     const statusTicker = document.getElementById('status-ticker');
+    const layoutBadge  = document.getElementById('layout-badge');
+    const fontBadge    = document.getElementById('font-size-badge');
 
-    // ── Auto-fit font (Phase 3.5 → Phase 5 upgrade) ──────────────────────
+    let currentRawCode = '';
+
+    // ── Java tokeniser ────────────────────────────────────────────────────────
+    const JAVA_KEYWORDS = new Set([
+      'abstract','assert','boolean','break','byte','case','catch','char','class',
+      'const','continue','default','do','double','else','enum','extends','final',
+      'finally','float','for','goto','if','implements','import','instanceof','int',
+      'interface','long','native','new','package','private','protected','public',
+      'return','short','static','strictfp','super','switch','synchronized','this',
+      'throw','throws','transient','try','var','void','volatile','while','record',
+      'sealed','permits','yield','null','true','false'
+    ]);
+
+    function escHtml(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function tokeniseJava(code) {
+      let out = '', i = 0;
+      const len = code.length;
+      while (i < len) {
+        // Single-line comment
+        if (code[i]==='/' && code[i+1]==='/') {
+          const end = code.indexOf('\n', i);
+          const sl  = end === -1 ? code.slice(i) : code.slice(i, end);
+          out += `<span class="c">${escHtml(sl)}</span>`; i += sl.length; continue;
+        }
+        // Block comment
+        if (code[i]==='/' && code[i+1]==='*') {
+          const end = code.indexOf('*/', i+2);
+          const sl  = end === -1 ? code.slice(i) : code.slice(i, end+2);
+          out += `<span class="c">${escHtml(sl)}</span>`; i += sl.length; continue;
+        }
+        // String literal
+        if (code[i]==='"') {
+          let j = i+1;
+          while (j<len) { if (code[j]==='\\'){j+=2;continue;} if(code[j]==='"'){j++;break;} j++; }
+          out += `<span class="s">${escHtml(code.slice(i,j))}</span>`; i=j; continue;
+        }
+        // Char literal
+        if (code[i]==="'") {
+          let j = i+1;
+          while (j<len) { if (code[j]==='\\'){j+=2;continue;} if(code[j]==="'"){j++;break;} j++; }
+          out += `<span class="s">${escHtml(code.slice(i,j))}</span>`; i=j; continue;
+        }
+        // Annotation
+        if (code[i]==='@') {
+          let j=i+1; while(j<len && /\w/.test(code[j])) j++;
+          out += `<span class="a">${escHtml(code.slice(i,j))}</span>`; i=j; continue;
+        }
+        // Number literal
+        if (/[0-9]/.test(code[i]) && (i===0 || /\W/.test(code[i-1]))) {
+          let j=i; while(j<len && /[0-9._xXbBfFdDlL]/.test(code[j])) j++;
+          out += `<span class="n">${escHtml(code.slice(i,j))}</span>`; i=j; continue;
+        }
+        // Identifier
+        if (/[a-zA-Z_$]/.test(code[i])) {
+          let j=i; while(j<len && /[\w$]/.test(code[j])) j++;
+          const word = code.slice(i,j);
+          if (JAVA_KEYWORDS.has(word)) {
+            out += `<span class="k">${escHtml(word)}</span>`;
+          } else if (/^[A-Z]/.test(word)) {
+            out += `<span class="t">${escHtml(word)}</span>`;
+          } else {
+            out += escHtml(word);
+          }
+          i=j; continue;
+        }
+        out += escHtml(code[i]); i++;
+      }
+      return out;
+    }
+
+    // ── Layout helpers ────────────────────────────────────────────────────────
+
+    /** Estimate number of visual (wrapped) lines a raw text would occupy
+     *  at a given font size inside a pane of paneWidthPx. */
+    function countWrappedLines(rawLines, paneWidthPx, fontSize) {
+      const charW = fontSize * CHAR_W_RATIO;
+      const charsPerLine = Math.max(1, Math.floor((paneWidthPx - 24) / charW)); // 24 = 2×12px padding
+      let rows = 0;
+      for (const line of rawLines) {
+        rows += Math.max(1, Math.ceil(line.length / charsPerLine));
+      }
+      return rows;
+    }
+
+    /** Max lines that fit in a pane of paneHeightPx at fontSize. */
+    function linesPerPane(paneHeightPx, fontSize) {
+      return Math.max(1, Math.floor(paneHeightPx / (fontSize * LINE_H_RATIO)));
+    }
+
+    // ── Single-pane: binary-search largest font that fits ─────────────────────
+    function fitSinglePane(rawLines) {
+      const pH = paneLeft.clientHeight;
+      const pW = paneLeft.clientWidth;
+
+      let lo = MIN_READABLE_PX, hi = MAX_FONT_PX, best = MIN_READABLE_PX;
+      while (lo <= hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        const totalRows = countWrappedLines(rawLines, pW, mid);
+        const maxRows   = linesPerPane(pH, mid);
+        if (totalRows <= maxRows) { best = mid; lo = mid + 1; }
+        else                      { hi  = mid - 1; }
+      }
+      return best;
+    }
+
+    // ── Dual-pane: binary-search largest font where left+right fit ────────────
+    function fitDualPane(rawLines) {
+      // Left pane is 50vw, right pane is 50vw (minus PIP overlay area)
+      const pH  = paneLeft.clientHeight;
+      const pW  = Math.floor(window.innerWidth * 0.5);
+      // Right pane: bottom 22 % × 34 % is blocked by PIP overlay; reduce effective height
+      const pHR = Math.floor(pH * 0.78);
+
+      let lo = MIN_READABLE_PX, hi = MAX_FONT_PX, bestFont = MIN_READABLE_PX, bestSplit = rawLines.length;
+      while (lo <= hi) {
+        const mid      = Math.floor((lo + hi) / 2);
+        const maxRowsL = linesPerPane(pH,  mid);
+        const maxRowsR = linesPerPane(pHR, mid);
+        // Find split index
+        let wrappedSoFar = 0, splitIdx = rawLines.length;
+        const charW = mid * CHAR_W_RATIO;
+        const cpl   = Math.max(1, Math.floor((pW - 24) / charW));
+        for (let li = 0; li < rawLines.length; li++) {
+          const rows = Math.max(1, Math.ceil(rawLines[li].length / cpl));
+          wrappedSoFar += rows;
+          if (wrappedSoFar > maxRowsL) { splitIdx = li; break; }
+        }
+        const rightLines = rawLines.slice(splitIdx);
+        const rightRows  = countWrappedLines(rightLines, pW, mid);
+        if (rightRows <= maxRowsR) { bestFont = mid; bestSplit = splitIdx; lo = mid + 1; }
+        else                       { hi = mid - 1; }
+      }
+      return { fontSize: bestFont, splitIdx: bestSplit };
+    }
+
+    // ── Activate / deactivate dual pane mode ──────────────────────────────────
+    function activateDual() {
+      wrapper.classList.add('dual');
+      paneLeft.classList.remove('pip-safe');  // PIP is on right pane in dual mode
+      layoutBadge.textContent = 'dual';
+    }
+    function activateSingle() {
+      wrapper.classList.remove('dual');
+      paneLeft.classList.add('pip-safe');
+      layoutBadge.textContent = 'single';
+    }
+
+    // ── Main autoFit ──────────────────────────────────────────────────────────
+    // Algorithm:
+    //   1. Try to fit all code in a single pane by reducing font ≥ MIN_READABLE_PX.
+    //   2. If even MIN_READABLE_PX overflows single pane → activate dual pane.
+    //   3. In dual-pane mode, find largest font where left+right together fit.
     function autoFitText() {
-      let size = 6.0;
-      const MIN_REM = 0.5;
-      outputPre.style.fontSize = size + 'rem';
+      if (!currentRawCode) return;
 
-      while (
-        (outputPre.scrollHeight > pipBox.clientHeight ||
-         outputPre.scrollWidth  > pipBox.clientWidth) &&
-        size > MIN_REM
-      ) {
-        size = Math.round((size - 0.1) * 100) / 100;
-        outputPre.style.fontSize = size + 'rem';
+      const rawLines = currentRawCode.split('\n');
+
+      // ── Phase 1: try single pane ──────────────────────────────────────────
+      const singleFontPx = fitSinglePane(rawLines);
+
+      // Check if fits at MIN_READABLE_PX
+      const pH = paneLeft.clientHeight;
+      const pWFull = window.innerWidth;
+      const totalRowsAtMin = countWrappedLines(rawLines, pWFull, MIN_READABLE_PX);
+      const maxRowsAtMin   = linesPerPane(pH, MIN_READABLE_PX);
+
+      if (totalRowsAtMin <= maxRowsAtMin) {
+        // Code fits in one pane → use single
+        activateSingle();
+
+        // Force layout to settle so clientWidth is correct for single pane
+        requestAnimationFrame(() => {
+          codeLeft.style.fontSize  = singleFontPx + 'px';
+          codeLeft.style.lineHeight = LINE_H_RATIO;
+          codeLeft.innerHTML = warnLine.outerHTML + tokeniseJava(currentRawCode);
+          codeRight.innerHTML = '';
+          fontBadge.textContent = singleFontPx + 'px';
+        });
+      } else {
+        // ── Phase 2: go dual pane ───────────────────────────────────────────
+        activateDual();
+
+        requestAnimationFrame(() => {
+          const { fontSize, splitIdx } = fitDualPane(rawLines);
+
+          const leftLines  = rawLines.slice(0, splitIdx);
+          const rightLines = rawLines.slice(splitIdx);
+
+          codeLeft.style.fontSize   = fontSize + 'px';
+          codeRight.style.fontSize  = fontSize + 'px';
+          codeLeft.style.lineHeight  = LINE_H_RATIO;
+          codeRight.style.lineHeight = LINE_H_RATIO;
+
+          codeLeft.innerHTML  = warnLine.outerHTML + tokeniseJava(leftLines.join('\n'));
+          codeRight.innerHTML = rightLines.length ? tokeniseJava(rightLines.join('\n')) : '';
+
+          fontBadge.textContent = fontSize + 'px (dual)';
+        });
       }
     }
 
-    // ── Workspace population helpers ──────────────────────────────────────
+    // ── Inject code ───────────────────────────────────────────────────────────
     function injectCode(block, hint, unverified) {
+      currentRawCode = block;
+
       if (unverified) {
         warnLine.textContent = '⚠ UNVERIFIED — compilation not confirmed\n';
         warnLine.classList.add('visible');
@@ -154,71 +399,63 @@
         warnLine.classList.remove('visible');
       }
 
-      codeBlock.textContent = block;
-      if (window.Prism) Prism.highlightAll();
-      outputPre.classList.remove('idle');
-
+      paneLeft.classList.remove('idle');
       requestAnimationFrame(() => requestAnimationFrame(autoFitText));
     }
 
-    // ── WebSocket message dispatcher ──────────────────────────────────────
+    window.addEventListener('resize', () => {
+      requestAnimationFrame(() => requestAnimationFrame(autoFitText));
+    });
+
+    // ── WebSocket handler ────────────────────────────────────────────────────
     function handleMessage(raw) {
       let data;
       try { data = JSON.parse(raw); }
       catch {
-        // Raw (non-JSON) fallback
-        codeBlock.textContent = raw;
-        if (window.Prism) Prism.highlightAll();
+        currentRawCode = raw;
+        paneLeft.classList.remove('idle');
         requestAnimationFrame(() => requestAnimationFrame(autoFitText));
         return;
       }
 
       switch (data.type) {
         case 'init':
-          if (data.state && data.state.current) {
-            injectCode(data.state.current, null, false);
-          }
+          if (data.state && data.state.current) injectCode(data.state.current, null, false);
           break;
-
         case 'solution': {
-          const unverified = typeof data.hint === 'string'
-                             && data.hint.startsWith('WARNING:');
+          const unverified = typeof data.hint === 'string' && data.hint.startsWith('WARNING:');
           injectCode(data.block || '', data.hint, unverified);
           break;
         }
-
         case 'status':
           statusTicker.innerText = data.message || '';
           break;
-
         case 'error':
           warnLine.textContent = '⚠ Error: ' + (data.message || 'Unknown error') + '\n';
           warnLine.classList.add('visible');
-          outputPre.classList.remove('idle');
+          paneLeft.classList.remove('idle');
           statusTicker.innerText = 'Error occurred.';
           requestAnimationFrame(() => requestAnimationFrame(autoFitText));
           break;
-
-        default:
-          break;
+        default: break;
       }
     }
 
-    // ── WebSocket with auto-reconnect ─────────────────────────────────────
+    // ── WebSocket with auto-reconnect ─────────────────────────────────────────
     function connect() {
       let wsUrl;
       if (window.location.protocol === 'https:') {
-        const ip = prompt('Enter your local Sotti IPv4 address (e.g., 192.168.29.50) for WebSocket connection:');
+        const ip = prompt('Enter your local Sotti IPv4 address (e.g., 192.168.29.50):');
         if (!ip) return;
         wsUrl = `ws://${ip}:8000/ws`;
       } else {
         wsUrl = `ws://${window.location.host}/ws`;
       }
-
       const ws = new WebSocket(wsUrl);
       ws.onmessage = (e) => handleMessage(e.data);
-      ws.onclose   = () => setTimeout(connect, 3000);
+      ws.onclose   = () => { statusTicker.innerText = 'Reconnecting…'; setTimeout(connect, 3000); };
       ws.onerror   = () => ws.close();
+      ws.onopen    = () => { statusTicker.innerText = 'Connected'; };
     }
 
     document.addEventListener('DOMContentLoaded', connect);

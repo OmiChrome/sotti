@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 tmp/*
 !tmp/.gitkeep
+data/sessions/*
+!data/sessions/.gitkeep
