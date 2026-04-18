@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sotti</title>
-  <meta name="description" content="Sotti — local screenshot-to-code pipeline dashboard." />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap"
-        rel="stylesheet" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sotti — Java Assistant</title>
+  
+  <!-- Prism.js — GHColors theme -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prism-themes@1.9.0/themes/prism-ghcolors.css" />
+
   <style>
+    /* ── Reset ──────────────────────────────────────────────────────── */
     *, *::before, *::after {
       box-sizing: border-box;
       margin: 0;
@@ -18,93 +18,201 @@
 
     html, body {
       width: 100vw;
-      min-height: 100vh;
-      background-color: #ffffff;
+      height: 100vh;
+      overflow: hidden;
+      background: #ffffff;
       color: #000000;
-      font-family: 'Fira Code', 'Roboto Mono', monospace;
-      font-size: 2rem;
-      white-space: pre-wrap;
-      overflow-x: hidden;
+      font-family: 'Fira Code', 'Consolas', monospace;
     }
 
-    #output {
+    /* ── PIP-safe bounding box (Phase 3.5) ───────────────────────────
+       60vw × 70vh in the top-left; bottom-right stays clear for PIP.  */
+    #pip-safe-zone {
+      width: 60vw;
+      height: 70vh;
+      overflow: hidden;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    #pip-safe-zone pre {
       display: block;
-      width: 100vw;
-      min-height: 100vh;
-      padding: 2rem;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0.5rem;
+      background: #ffffff !important;
+      border: none !important;
+      box-shadow: none !important;
+      text-shadow: none !important;
+      text-align: left;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      overflow: hidden;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      line-height: 1.45;
     }
 
-    /* Blinking cursor */
-    #output::after {
+    #pip-safe-zone pre code {
+      background: #ffffff !important;
+      font-family: inherit !important;
+      font-size: inherit !important;
+      line-height: inherit !important;
+      text-align: left;
+      white-space: pre-wrap !important;
+      word-wrap: break-word !important;
+    }
+
+    /* ── Prism token overrides (Phase 3.5) ───────────────────────── */
+    .token.keyword   { color: #000080 !important; font-weight: bold !important; }
+    .token.string    { color: #006400 !important; }
+    .token.class-name,
+    .token.type      { color: #4B0082 !important; font-weight: bold !important; }
+    .token.comment   { color: #333333 !important; font-style: italic !important; }
+
+    /* ── Inline unverified / error warning ───────────────────────── */
+    #warn-line {
+      display: none;
+      color: #d32f2f;
+      font-weight: bold;
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    #warn-line.visible { display: block; }
+
+    /* ── Blinking cursor (idle) ──────────────────────────────────── */
+    #output.idle::after {
       content: '▍';
       display: inline-block;
       animation: blink 1s step-end infinite;
+      color: #000080;
     }
-
     @keyframes blink {
       0%, 100% { opacity: 1; }
       50%       { opacity: 0; }
     }
 
-    /* Status badge */
-    #status {
+    /* ── Minimal status ticker (Phase 6) ─────────────────────────── */
+    #status-ticker {
       position: fixed;
-      top: 1rem;
-      right: 1.5rem;
-      font-size: 0.75rem;
-      letter-spacing: 0.08em;
-      opacity: 0.45;
+      bottom: 10px;
+      left: 10px;
+      font-family: monospace;
+      font-size: 1rem;
+      color: #555;
     }
-    #status.connected  { color: #000; }
-    #status.disconnected { color: #888; }
   </style>
 </head>
 <body>
-  <span id="status" class="disconnected">● OFFLINE</span>
-  <pre id="output">Waiting for Sotti...</pre>
+
+  <!-- CENTER — Phase 3.5 pip-safe-zone -->
+  <div id="pip-safe-zone">
+    <pre id="output" class="idle"><span id="warn-line" role="alert"></span><code id="code-block" class="language-java">Waiting for Sotti…</code></pre>
+  </div>
+
+  <div id="status-ticker">Waiting for images...</div>
+
+  <!-- Prism.js core + autoloader -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 
   <script>
-    const output = document.getElementById('output');
-    const statusEl = document.getElementById('status');
+    // ── DOM refs ─────────────────────────────────────────────────────────
+    const pipBox       = document.getElementById('pip-safe-zone');
+    const outputPre    = document.getElementById('output');
+    const codeBlock    = document.getElementById('code-block');
+    const warnLine     = document.getElementById('warn-line');
+    const statusTicker = document.getElementById('status-ticker');
 
-    /**
-     * Try to pretty-print JSON; fall back to raw string if it's not valid JSON.
-     */
-    function render(text) {
-      try {
-        const obj = JSON.parse(text);
-        return JSON.stringify(obj, null, 2);
-      } catch {
-        return text;
+    // ── Auto-fit font (Phase 3.5 → Phase 5 upgrade) ──────────────────────
+    function autoFitText() {
+      let size = 6.0;
+      const MIN_REM = 0.5;
+      outputPre.style.fontSize = size + 'rem';
+
+      while (
+        (outputPre.scrollHeight > pipBox.clientHeight ||
+         outputPre.scrollWidth  > pipBox.clientWidth) &&
+        size > MIN_REM
+      ) {
+        size = Math.round((size - 0.1) * 100) / 100;
+        outputPre.style.fontSize = size + 'rem';
       }
     }
 
-    function connect() {
-      const ws = new WebSocket(`ws://${location.host}/ws`);
+    // ── Workspace population helpers ──────────────────────────────────────
+    function injectCode(block, hint, unverified) {
+      if (unverified) {
+        warnLine.textContent = '⚠ UNVERIFIED — compilation not confirmed\n';
+        warnLine.classList.add('visible');
+      } else {
+        warnLine.textContent = '';
+        warnLine.classList.remove('visible');
+      }
 
-      ws.onopen = () => {
-        statusEl.textContent = '● LIVE';
-        statusEl.className = 'connected';
-      };
+      codeBlock.textContent = block;
+      if (window.Prism) Prism.highlightAll();
+      outputPre.classList.remove('idle');
 
-      ws.onmessage = (event) => {
-        // Each message replaces the current content (one pack at a time).
-        output.textContent = render(event.data);
-      };
-
-      ws.onclose = () => {
-        statusEl.textContent = '● OFFLINE — reconnecting…';
-        statusEl.className = 'disconnected';
-        setTimeout(connect, 3000);
-      };
-
-      ws.onerror = (err) => {
-        console.error('[Sotti] WebSocket error:', err);
-        ws.close();
-      };
+      requestAnimationFrame(() => requestAnimationFrame(autoFitText));
     }
 
-    connect();
+    // ── WebSocket message dispatcher ──────────────────────────────────────
+    function handleMessage(raw) {
+      let data;
+      try { data = JSON.parse(raw); }
+      catch {
+        // Raw (non-JSON) fallback
+        codeBlock.textContent = raw;
+        if (window.Prism) Prism.highlightAll();
+        requestAnimationFrame(() => requestAnimationFrame(autoFitText));
+        return;
+      }
+
+      switch (data.type) {
+        case 'init':
+          if (data.state && data.state.current) {
+            injectCode(data.state.current, null, false);
+          }
+          break;
+
+        case 'solution': {
+          const unverified = typeof data.hint === 'string'
+                             && data.hint.startsWith('WARNING:');
+          injectCode(data.block || '', data.hint, unverified);
+          break;
+        }
+
+        case 'status':
+          statusTicker.innerText = data.message || '';
+          break;
+
+        case 'error':
+          warnLine.textContent = '⚠ Error: ' + (data.message || 'Unknown error') + '\n';
+          warnLine.classList.add('visible');
+          outputPre.classList.remove('idle');
+          statusTicker.innerText = 'Error occurred.';
+          requestAnimationFrame(() => requestAnimationFrame(autoFitText));
+          break;
+
+        default:
+          break;
+      }
+    }
+
+    // ── WebSocket with auto-reconnect ─────────────────────────────────────
+    function connect() {
+      const ws = new WebSocket(`ws://${location.host}/ws`);
+      ws.onmessage = (e) => handleMessage(e.data);
+      ws.onclose   = () => setTimeout(connect, 3000);
+      ws.onerror   = () => ws.close();
+    }
+
+    document.addEventListener('DOMContentLoaded', connect);
   </script>
 </body>
 </html>
