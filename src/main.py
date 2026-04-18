@@ -22,9 +22,11 @@ from .state import APP_STATE
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [SERVER] %(message)s",
+    format="%(asctime)s [%(levelname)-5s] %(message)s",
     datefmt="%H:%M:%S",
 )
+# Quiet down uvicorn's own access logging a tiny bit so our logs stand out
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -127,8 +129,14 @@ async def on_startup() -> None:
     app.state.observer = observer
 
     local_ip = get_local_ip()
-    print(f"[NETWORK] Local UI Access: http://{local_ip}:8000")
-    print("[NETWORK] Vercel UI Access: https://sotti.vercel.app (Note: requires WebSocket override)")
+    print()
+    print("  ┌─────────────────────────────────────────────────┐")
+    print(f"  │  Sotti is running                               │")
+    print(f"  │  Local  → http://{local_ip}:8000{' ' * (28 - len(local_ip))}│")
+    print(f"  │  Vercel → https://sotti.vercel.app              │")
+    print("  │  (Vercel requires WebSocket override)           │")
+    print("  └─────────────────────────────────────────────────┘")
+    print()
 
 
 @app.on_event("shutdown")

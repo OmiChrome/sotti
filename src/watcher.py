@@ -93,53 +93,74 @@ class ScreenshotHandler(FileSystemEventHandler):
             names,
         )
 
-        msg = f"Sending batch of {count} image{'s' if count != 1 else ''}..."
+        log.info("Scheduling AI pipeline on event loop...")
 
         # Schedule the async pipeline on the uvicorn event loop.
+        # We capture self._loop here (set at startup) to avoid the
+        # "no current event loop in thread" error that occurs when
+        # asyncio.get_event_loop() is called from a worker thread.
         asyncio.run_coroutine_threadsafe(
-            self._broadcast_and_process(msg, image_paths), self._loop
+            self._broadcast_and_process(image_paths), self._loop
         )
 
-    async def _broadcast_and_process(self, msg: str, image_paths: list[str]) -> None:
+    async def _broadcast_and_process(self, image_paths: list[str]) -> None:
         from .main import manager
-        await manager.broadcast({"type": "status", "message": msg})
-        await _process_pack(image_paths)
+        count = len(image_paths)
+        await manager.broadcast({
+            "type": "status",
+            "message": f"Sealed batch of {count} image{'s' if count != 1 else ''}. Starting OCR...",
+        })
+        await _process_pack(image_paths, self._loop)
 
 
 # ---------------------------------------------------------------------------
 # Async AI pipeline (runs on the asyncio event loop)
 # ---------------------------------------------------------------------------
 
-async def _process_pack(image_paths: list[str]) -> None:
+async def _process_pack(image_paths: list[str], loop: asyncio.AbstractEventLoop) -> None:
     """
     Passes paths to generate_and_verify_solution directly, avoiding split phases.
+    The `loop` argument is the running asyncio loop, forwarded into the sync
+    executor so it can schedule status broadcasts back to the UI without
+    triggering the "no current event loop in thread" error.
     """
     from .agent_manager import generate_and_verify_solution
     from .main import manager
 
-    log.info("Processing pack: %s", [Path(p).name for p in image_paths])
+    names = [Path(p).name for p in image_paths]
+    log.info("▶ Pipeline START  |  images=%s", names)
+    t_start = time.monotonic()
+
+    def _sync_broadcast(payload: dict) -> None:
+        """Thread-safe shim: schedules a coroutine on the asyncio loop."""
+        asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
 
     try:
-        loop = asyncio.get_running_loop()
+        current_loop = asyncio.get_running_loop()
 
-        solution = await loop.run_in_executor(
+        solution = await current_loop.run_in_executor(
             None,
             generate_and_verify_solution,
             image_paths,
-            manager.broadcast,   # Pass the async broadcast fn for live status updates
+            _sync_broadcast,   # sync callable — safe to call from a worker thread
         )
 
+        elapsed = time.monotonic() - t_start
         if solution:
+            log.info("▶ Pipeline DONE   |  elapsed=%.1fs", elapsed)
             await manager.broadcast({
                 "type": "solution",
                 "block": solution["block"],
                 "hint": solution["hint"],
             })
+        else:
+            log.info("▶ Pipeline SKIP   |  elapsed=%.1fs (question already solved)", elapsed)
 
         await manager.broadcast({"type": "status", "message": "Waiting for images..."})
 
     except Exception as exc:
-        log.error("Pipeline error: %s", exc, exc_info=True)
+        elapsed = time.monotonic() - t_start
+        log.error("▶ Pipeline ERROR  |  elapsed=%.1fs  |  %s", elapsed, exc, exc_info=True)
         await manager.broadcast({"type": "error", "message": str(exc)})
         await manager.broadcast({"type": "status", "message": "Waiting for images..."})
 

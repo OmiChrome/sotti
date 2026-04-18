@@ -7,8 +7,9 @@ Phase 6: Includes OCR fallback, smart question tracking by title to save compute
 
 import json
 import logging
+import time
 from pathlib import Path
-from typing import Callable, Coroutine, Any
+from typing import Callable, Any
 
 from google import genai
 from google.genai import types
@@ -16,7 +17,7 @@ from PIL import Image
 
 from .config import settings
 from . import verifier
-from .state import APP_STATE
+from .state import APP_STATE, save_state
 
 log = logging.getLogger(__name__)
 
@@ -78,19 +79,45 @@ Rules:
 # ---------------------------------------------------------------------------
 
 _client: genai.Client | None = None
+_fallback_client: genai.Client | None = None
 
-def _get_client() -> genai.Client:
-    global _client
+def _get_client(use_fallback: bool = False) -> genai.Client:
+    global _client, _fallback_client
+    if use_fallback:
+        if not settings.gemini_api_key_fallback:
+            raise ValueError("Fallback requested but gemini_api_key_fallback is not configured.")
+        if _fallback_client is None:
+            _fallback_client = genai.Client(api_key=settings.gemini_api_key_fallback)
+            log.info("Gemini fallback client initialised.")
+        return _fallback_client
+
     if _client is None:
         _client = genai.Client(api_key=settings.gemini_api_key)
-        log.info("Gemini client initialised.")
+        log.info("Gemini primary client initialised.")
     return _client
+
+def _generate_with_fallback(model: str, contents: list, config: types.GenerateContentConfig) -> Any:
+    client = _get_client()
+    try:
+        return client.models.generate_content(model=model, contents=contents, config=config)
+    except Exception as e:
+        error_msg = str(e)
+        if "429" in error_msg or "503" in error_msg:
+            if settings.gemini_api_key_fallback:
+                log.warning("API key hit rate limit/error: %s. Switching to fallback key...", error_msg[:50])
+                fallback_client = _get_client(use_fallback=True)
+                return fallback_client.models.generate_content(model=model, contents=contents, config=config)
+            else:
+                log.warning("API key hit rate limit/error (%s), but no fallback key configured.", error_msg[:50])
+        raise
 
 # ---------------------------------------------------------------------------
 # Broadcast helper type
 # ---------------------------------------------------------------------------
 
-BroadcastFn = Callable[[dict], Coroutine[Any, Any, None]]
+# A sync callable that schedules a broadcast on the asyncio loop.
+# Provided by watcher._sync_broadcast so it's safe to call from a thread.
+BroadcastFn = Callable[[dict], None]
 
 
 # ---------------------------------------------------------------------------
@@ -111,21 +138,20 @@ def generate_and_verify_solution(
     import asyncio
 
     def _emit(payload: dict) -> None:
-        """Fire-and-forget: schedule a broadcast on the asyncio loop."""
+        """Fire-and-forget: directly call the sync broadcast shim."""
         if broadcast is None:
             return
         try:
-            loop = asyncio.get_event_loop()
-            asyncio.run_coroutine_threadsafe(broadcast(payload), loop)
+            broadcast(payload)
         except Exception as exc:
             log.warning("Broadcast emit failed: %s", exc)
 
+    log.info("  [OCR] Starting OCR stage...")
     _emit({"type": "status", "message": "Doing OCR..."})
+    t0 = time.monotonic()
 
     if not image_paths:
         raise ValueError("image_paths must not be empty")
-
-    client = _get_client()
 
     parts: list = []
     for raw_path in image_paths:
@@ -143,10 +169,11 @@ def generate_and_verify_solution(
         "Return ONLY the JSON object — no markdown fences, no extra text."
     )
 
-    log.info("Sending %d image(s) for OCR...", len(image_paths))
+    log.info("  [OCR] Sending %d image(s) to model=%s ...", len(image_paths), settings.orchestrator_model)
 
     try:
-        response = client.models.generate_content(
+        t_api = time.monotonic()
+        response = _generate_with_fallback(
             model=settings.orchestrator_model,
             contents=parts,
             config=types.GenerateContentConfig(
@@ -155,11 +182,13 @@ def generate_and_verify_solution(
                 temperature=0.1,
             ),
         )
+        log.info("  [OCR] Model responded in %.1fs", time.monotonic() - t_api)
     except Exception as e:
-        log.warning("OCR failed with %s: %s. Using fallback %s...", 
-                    settings.orchestrator_model, e, settings.sub_agent_model)
+        log.warning("  [OCR] Failed with %s in %.1fs: %s. Trying fallback model=%s ...",
+                    settings.orchestrator_model, time.monotonic() - t_api, e, settings.sub_agent_model)
         _emit({"type": "status", "message": f"OCR fallback, using {settings.sub_agent_model}..."})
-        response = client.models.generate_content(
+        t_api = time.monotonic()
+        response = _generate_with_fallback(
             model=settings.sub_agent_model,
             contents=parts,
             config=types.GenerateContentConfig(
@@ -168,6 +197,7 @@ def generate_and_verify_solution(
                 temperature=0.1,
             ),
         )
+        log.info("  [OCR] Fallback responded in %.1fs", time.monotonic() - t_api)
 
     raw_text: str = response.text or ""
 
@@ -178,6 +208,8 @@ def generate_and_verify_solution(
 
     title = question_pack.get("title", "")
     stub_code = question_pack.get("stub_code", "")
+    log.info("  [OCR] Extracted title=%r  stub_code_len=%d  elapsed=%.1fs",
+             title, len(stub_code), time.monotonic() - t0)
 
     # Check solved_questions state
     if title and title in APP_STATE["solved_questions"]:
@@ -189,6 +221,9 @@ def generate_and_verify_solution(
             return None
 
     _emit({"type": "status", "message": "Generating code..."})
+    log.info("  [GEN] Starting code generation (model=%s, max_retries=%d)...",
+             settings.sub_agent_model, _MAX_RETRIES)
+    t1 = time.monotonic()
 
     user_prompt = (
         "Here is the question pack (JSON):\n"
@@ -202,7 +237,9 @@ def generate_and_verify_solution(
     verified = False
 
     for attempt in range(1, _MAX_RETRIES + 1):
-        log.info("Attempt %d/%d: generating solution...", attempt, _MAX_RETRIES)
+        log.info("  [GEN] Attempt %d/%d — calling model...", attempt, _MAX_RETRIES)
+        _emit({"type": "status", "message": f"Code gen attempt {attempt}/{_MAX_RETRIES}..."})
+        t_attempt = time.monotonic()
 
         current_contents: list = list(history) + [
             types.Content(
@@ -211,7 +248,7 @@ def generate_and_verify_solution(
             )
         ]
 
-        response = client.models.generate_content(
+        response = _generate_with_fallback(
             model=settings.sub_agent_model,
             contents=current_contents,
             config=types.GenerateContentConfig(
@@ -222,6 +259,7 @@ def generate_and_verify_solution(
         )
 
         raw_text: str = response.text or ""
+        log.info("  [GEN] Attempt %d/%d responded in %.1fs", attempt, _MAX_RETRIES, time.monotonic() - t_attempt)
 
         try:
             solution = json.loads(raw_text)
@@ -237,7 +275,9 @@ def generate_and_verify_solution(
 
         last_block = block
 
-        log.info("Attempt %d/%d: compiling...", attempt, _MAX_RETRIES)
+        log.info("  [VERIFY] Attempt %d/%d — compiling full_file (%d chars)...",
+                 attempt, _MAX_RETRIES, len(full_file))
+        t_verify = time.monotonic()
 
         if full_file:
             ok, output = verifier.verify_java_code(full_file)
@@ -245,28 +285,32 @@ def generate_and_verify_solution(
             ok, output = False, "full_file was empty; cannot verify."
 
         if ok:
-            log.info("Verification PASSED on attempt %d.", attempt)
+            log.info("  [VERIFY] PASSED on attempt %d in %.1fs", attempt, time.monotonic() - t_verify)
             last_hint = _build_hint(question_pack, ok=True)
             verified = True
             break
         else:
             err_snippet = output[:300]
-            log.warning("Verification FAILED on attempt %d: %s", attempt, err_snippet)
+            log.warning("  [VERIFY] FAILED on attempt %d in %.1fs: %s",
+                        attempt, time.monotonic() - t_verify, err_snippet)
             last_hint = output
 
             _append_to_history(history, role="model", text=raw_text)
             _append_to_history(history, role="user", text=_fix_prompt(last_stderr=output))
 
     if not verified:
-        log.warning("All %d attempts failed. Returning best-effort solution.", _MAX_RETRIES)
+        log.warning("  [GEN] All %d attempts failed in %.1fs. Returning best-effort.",
+                    _MAX_RETRIES, time.monotonic() - t1)
         last_hint = "WARNING: Failed local verification — " + last_hint[:200]
     else:
+        log.info("  [GEN] Solution verified in %.1fs total.", time.monotonic() - t1)
         APP_STATE["current"] = last_block
         if title:
             APP_STATE["solved_questions"][title] = {
                 "block": last_block,
                 "stub_code": stub_code
             }
+        save_state()
 
     return {"block": last_block, "hint": last_hint}
 

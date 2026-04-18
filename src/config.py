@@ -19,23 +19,13 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: str = Field(..., description="Google Gemini API key")
-    orchestrator_model: str = Field(
-        default="gemini-2.5-flash-preview-04-17",
-        description="Model used for question-pack extraction",
+    gemini_api_key_fallback: str | None = Field(
+        default=None, description="Optional fallback Google Gemini API key"
     )
-    sub_agent_model: str = Field(
-        default="gemma-4-31b-it",
-        description="Model reserved for sub-agent tasks (Phase 3)",
-    )
-    watch_dir: Path = Field(
-        default=Path(r"C:\Users\omi\Pictures\Screenshots"),
-        description="Directory to monitor for new screenshots",
-    )
-    settle_seconds: int = Field(
-        default=10,
-        ge=1,
-        description="Quiet period (seconds) before a batch is sealed",
-    )
+    orchestrator_model: str = Field(..., description="Model used for question-pack extraction (OCR)")
+    sub_agent_model: str = Field(..., description="Model used for Java code generation and retry loop")
+    watch_dir: Path = Field(..., description="Directory to monitor for new screenshots")
+    settle_seconds: int = Field(..., ge=1, description="Quiet period (seconds) before a batch is sealed")
 
 
 # Module-level singleton — import this everywhere.

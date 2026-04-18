@@ -116,8 +116,9 @@ Users juggle multi-page screenshots (question, tests, stub). Need fast way to:
 
 ### Fallback
 
-* Use backup model on failure
-* Never hard stop
+* **Success Fallback**: Use backup model on generation failure.
+* **Resilience Fallback**: Switch to `api_key_fallback` if primary `api_key` hits rate limits or safety blocks.
+* Never hard stop; always attempt a secondary path.
 
 ## UI
 
@@ -146,18 +147,21 @@ Users juggle multi-page screenshots (question, tests, stub). Need fast way to:
 * File watching: `watchdog`
 * Frontend: Vanilla HTML/CSS/JS (single file)
 * Java runner: subprocess calling system `java`
-* Storage: In-memory state (Phase 6)
+* Storage: Local JSON files in `./data/`
 * IPC: REST + WebSockets
 
 ### Model Layer (Google AI Studio)
 
 * Powered by Google Gemini SDK
-* User can configure:
-
+* Multi-Key Support:
+  * `api_key`: Primary key for orchestration and extraction.
+  * `api_key_fallback`: Secondary key for rate-limit recovery.
+* Model Config:
   * Orchestrator model (e.g., Gemini 2.5 Flash)
   * Code generation model (e.g., Gemma 2)
   * Error fallback / Sub-agent model
-* All model names must be env/config driven
+* Switching keys/models must be handled automatically on HTTP 429 or 503.
+* All model names and keys must be env/config driven.
 
 ### Backend
 
