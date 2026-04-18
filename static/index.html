@@ -29,7 +29,7 @@
     #pane-wrapper {
       display: flex;
       width: 100vw;
-      height: calc(100vh - 36px);   /* 36px reserved for status bar */
+      height: 100vh;
       overflow: hidden;
       transition: none;
     }
@@ -40,6 +40,9 @@
       overflow: hidden;
       padding: 8px 12px;
       flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
 
     /* Single-pane default: full width */
@@ -79,7 +82,6 @@
     .code-pre {
       display: block;
       width: 100%;
-      height: 100%;
       margin: 0; padding: 0;
       background: transparent;
       border: none;
@@ -125,22 +127,7 @@
     }
     #warn-line.visible { display: block; }
 
-    /* ── Status bar ──────────────────────────────────────────────────────── */
-    #status-bar {
-      position: fixed;
-      bottom: 0; left: 0;
-      width: 100vw; height: 36px;
-      background: #f5f5f5;
-      border-top: 1px solid #ddd;
-      display: flex;
-      align-items: center;
-      padding: 0 12px;
-      gap: 16px;
-      z-index: 20;
-    }
-    #status-ticker  { font-family: monospace; font-size: 0.85rem; color: #555; flex: 1; }
-    #layout-badge   { font-family: monospace; font-size: 0.75rem; color: #aaa; }
-    #font-size-badge { font-family: monospace; font-size: 0.75rem; color: #999; }
+    /* ── Status bar removed ── */
   </style>
 </head>
 <body>
@@ -148,7 +135,7 @@
   <div id="pane-wrapper">
     <!-- Left / primary pane -->
     <div id="pane-left" class="pane idle pip-safe">
-      <pre id="code-left" class="code-pre"><span id="warn-line" role="alert"></span>Waiting for Sotti…</pre>
+      <pre id="code-left" class="code-pre"><span id="warn-line" role="alert"></span><span id="placeholder-text">Waiting for Sotti…</span></pre>
     </div>
     <!-- Right / overflow pane (hidden until dual-pane is activated) -->
     <div id="pane-right" class="pane">
@@ -156,12 +143,7 @@
     </div>
   </div>
 
-  <!-- Status bar -->
-  <div id="status-bar">
-    <span id="status-ticker">Waiting for images…</span>
-    <span id="layout-badge">single</span>
-    <span id="font-size-badge">–</span>
-  </div>
+
 
   <script>
     // ── Constants ────────────────────────────────────────────────────────────
@@ -173,15 +155,13 @@
     const LINE_H_RATIO    = 1.5;     // line-height
 
     // ── DOM refs ─────────────────────────────────────────────────────────────
-    const wrapper      = document.getElementById('pane-wrapper');
-    const paneLeft     = document.getElementById('pane-left');
-    const paneRight    = document.getElementById('pane-right');
-    const codeLeft     = document.getElementById('code-left');
-    const codeRight    = document.getElementById('code-right');
-    const warnLine     = document.getElementById('warn-line');
-    const statusTicker = document.getElementById('status-ticker');
-    const layoutBadge  = document.getElementById('layout-badge');
-    const fontBadge    = document.getElementById('font-size-badge');
+    const wrapper         = document.getElementById('pane-wrapper');
+    const paneLeft        = document.getElementById('pane-left');
+    const paneRight       = document.getElementById('pane-right');
+    const codeLeft        = document.getElementById('code-left');
+    const codeRight       = document.getElementById('code-right');
+    const warnLine        = document.getElementById('warn-line');
+    const placeholderText = document.getElementById('placeholder-text');
 
     let currentRawCode = '';
 
@@ -325,12 +305,10 @@
     function activateDual() {
       wrapper.classList.add('dual');
       paneLeft.classList.remove('pip-safe');  // PIP is on right pane in dual mode
-      layoutBadge.textContent = 'dual';
     }
     function activateSingle() {
       wrapper.classList.remove('dual');
       paneLeft.classList.add('pip-safe');
-      layoutBadge.textContent = 'single';
     }
 
     // ── Main autoFit ──────────────────────────────────────────────────────────
@@ -362,7 +340,6 @@
           codeLeft.style.lineHeight = LINE_H_RATIO;
           codeLeft.innerHTML = warnLine.outerHTML + tokeniseJava(currentRawCode);
           codeRight.innerHTML = '';
-          fontBadge.textContent = singleFontPx + 'px';
         });
       } else {
         // ── Phase 2: go dual pane ───────────────────────────────────────────
@@ -381,8 +358,6 @@
 
           codeLeft.innerHTML  = warnLine.outerHTML + tokeniseJava(leftLines.join('\n'));
           codeRight.innerHTML = rightLines.length ? tokeniseJava(rightLines.join('\n')) : '';
-
-          fontBadge.textContent = fontSize + 'px (dual)';
         });
       }
     }
@@ -428,13 +403,13 @@
           break;
         }
         case 'status':
-          statusTicker.innerText = data.message || '';
+          if (placeholderText) placeholderText.innerText = data.message || '';
           break;
         case 'error':
           warnLine.textContent = '⚠ Error: ' + (data.message || 'Unknown error') + '\n';
           warnLine.classList.add('visible');
           paneLeft.classList.remove('idle');
-          statusTicker.innerText = 'Error occurred.';
+          if (placeholderText) placeholderText.innerText = 'Error occurred.';
           requestAnimationFrame(() => requestAnimationFrame(autoFitText));
           break;
         default: break;
@@ -453,9 +428,9 @@
       }
       const ws = new WebSocket(wsUrl);
       ws.onmessage = (e) => handleMessage(e.data);
-      ws.onclose   = () => { statusTicker.innerText = 'Reconnecting…'; setTimeout(connect, 3000); };
+      ws.onclose   = () => { if (placeholderText) placeholderText.innerText = 'Reconnecting…'; setTimeout(connect, 3000); };
       ws.onerror   = () => ws.close();
-      ws.onopen    = () => { statusTicker.innerText = 'Connected'; };
+      ws.onopen    = () => { if (placeholderText) placeholderText.innerText = 'Connected'; };
     }
 
     document.addEventListener('DOMContentLoaded', connect);
