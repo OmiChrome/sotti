@@ -6,6 +6,7 @@ channel, and wires the watcher daemon into the asyncio event loop.
 
 import asyncio
 import logging
+import socket
 from pathlib import Path
 
 import uvicorn
@@ -29,6 +30,17 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # App + static files
 # ---------------------------------------------------------------------------
+
+def get_local_ip() -> str:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
@@ -114,6 +126,10 @@ async def on_startup() -> None:
     observer = start_watcher(loop)
     app.state.observer = observer
 
+    local_ip = get_local_ip()
+    print(f"[NETWORK] Local UI Access: http://{local_ip}:8000")
+    print("[NETWORK] Vercel UI Access: https://sotti.vercel.app (Note: requires WebSocket override)")
+
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
@@ -129,4 +145,4 @@ async def on_shutdown() -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    uvicorn.run("src.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)

@@ -206,8 +206,15 @@
 
     // ── WebSocket with auto-reconnect ─────────────────────────────────────
     function connect() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      let wsUrl;
+      if (window.location.protocol === 'https:') {
+        const ip = prompt('Enter your local Sotti IPv4 address (e.g., 192.168.29.50) for WebSocket connection:');
+        if (!ip) return;
+        wsUrl = `ws://${ip}:8000/ws`;
+      } else {
+        wsUrl = `ws://${window.location.host}/ws`;
+      }
+
       const ws = new WebSocket(wsUrl);
       ws.onmessage = (e) => handleMessage(e.data);
       ws.onclose   = () => setTimeout(connect, 3000);

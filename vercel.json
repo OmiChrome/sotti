@@ -1,0 +1,5 @@
+{
+  "version": 2,
+  "regions": ["bom1"],
+  "routes": [{ "src": "/(.*)", "dest": "/static/$1" }]
+}
