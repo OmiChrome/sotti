@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .watcher import start_watcher
 from .state import APP_STATE
+from .config import settings
+from .startup_checks import run_startup_checks
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -124,6 +126,9 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    # --- Sanity checks (parallel, ≤5 s) ---
+    await run_startup_checks(settings)
+
     loop = asyncio.get_running_loop()
     observer = start_watcher(loop)
     app.state.observer = observer
