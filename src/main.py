@@ -12,6 +12,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from contextlib import asynccontextmanager
 
 from .watcher import start_watcher
 from .state import APP_STATE
@@ -49,7 +50,35 @@ def get_local_ip() -> str:
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title="Sotti", version="0.1.0")
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
+    # --- Sanity checks (parallel, ≤5 s) ---
+    await run_startup_checks(settings)
+
+    loop = asyncio.get_running_loop()
+    observer = start_watcher(loop)
+    app.state.observer = observer
+
+    local_ip = get_local_ip()
+    print()
+    print("  ┌─────────────────────────────────────────────────┐")
+    print(f"  │  Sotti is running                               │")
+    print(f"  │  Localhost → http://127.0.0.1:{settings.server_port:<13} │")
+    print(f"  │  Network   → http://{local_ip}:{settings.server_port:<13} │")
+    print(f"  │  Vercel    → https://sotti.vercel.app           │")
+    print("  │                                                 │")
+    print("  │  (To access from phone over Network, ensure     │")
+    print("  │  port is allowed in Windows Firewall)           │")
+    print("  └─────────────────────────────────────────────────┘")
+    print()
+    yield
+    obs = getattr(app.state, "observer", None)
+    if obs:
+        obs.stop()
+        obs.join()
+        log.info("Watcher stopped.")
+
+app = FastAPI(title="Sotti", version="0.1.0", lifespan=app_lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
 
@@ -121,41 +150,13 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Startup / shutdown lifecycle
-# ---------------------------------------------------------------------------
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    # --- Sanity checks (parallel, ≤5 s) ---
-    await run_startup_checks(settings)
-
-    loop = asyncio.get_running_loop()
-    observer = start_watcher(loop)
-    app.state.observer = observer
-
-    local_ip = get_local_ip()
-    print()
-    print("  ┌─────────────────────────────────────────────────┐")
-    print(f"  │  Sotti is running                               │")
-    print(f"  │  Local  → http://{local_ip}:8000{' ' * (28 - len(local_ip))}│")
-    print(f"  │  Vercel → https://sotti.vercel.app              │")
-    print("  │  (Vercel requires WebSocket override)           │")
-    print("  └─────────────────────────────────────────────────┘")
-    print()
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
-    obs = getattr(app.state, "observer", None)
-    if obs:
-        obs.stop()
-        obs.join()
-        log.info("Watcher stopped.")
-
-
-# ---------------------------------------------------------------------------
 # Dev entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "src.main:app", 
+        host=settings.server_host, 
+        port=settings.server_port, 
+        reload=True
+    )

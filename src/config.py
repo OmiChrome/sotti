@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     sub_agent_model: str = Field(..., description="Model used for Java code generation and retry loop")
     watch_dir: Path = Field(..., description="Directory to monitor for new screenshots")
     settle_seconds: int = Field(..., ge=1, description="Quiet period (seconds) before a batch is sealed")
+    
+    # Server network bindings
+    server_host: str = Field("0.0.0.0", description="IP address for Uvicorn to bind to")
+    server_port: int = Field(8000, description="Port for Uvicorn to bind to")
 
     @field_validator("watch_dir", mode="before")
     @classmethod

@@ -11,6 +11,7 @@ All three run concurrently; hard timeout of 5 seconds so startup is never blocke
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,13 @@ if TYPE_CHECKING:
     from .config import Settings
 
 log = logging.getLogger(__name__)
+
+# Force UTF-8 on Windows consoles so box-drawing / emoji chars don't crash.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+except AttributeError:
+    pass  # Py < 3.7 or non-TextIOWrapper — best effort
 
 # ---------------------------------------------------------------------------
 # ANSI helpers
@@ -31,15 +39,15 @@ _D = "\033[0m"    # reset
 
 
 def _ok(msg: str) -> str:
-    return f"  {_G}✓{_D}  {msg}"
+    return f"  {_G}[OK]{_D}  {msg}"
 
 
 def _fail(msg: str) -> str:
-    return f"  {_R}✗{_D}  {msg}"
+    return f"  {_R}[!!]{_D}  {msg}"
 
 
 def _warn(msg: str) -> str:
-    return f"  {_Y}⚠{_D}  {msg}"
+    return f"  {_Y}[??]{_D}  {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +143,7 @@ async def run_startup_checks(settings: "Settings") -> bool:
     Prints a coloured checklist to stdout.
     Returns True if all critical checks passed (caller can decide whether to abort).
     """
-    print(f"\n  {_B}── Startup Checks {'─' * 31}{_D}")
+    print(f"\n  {_B}-- Startup Checks {'─' * 31}{_D}")
 
     try:
         dir_result, api_results = await asyncio.wait_for(
@@ -175,7 +183,7 @@ async def run_startup_checks(settings: "Settings") -> bool:
             print(_ok(msg) if ok else _fail(msg))
             all_ok &= ok
 
-    print(f"  {'─' * 49}")
+    print(f"  {'-' * 49}")
     if all_ok:
         print(f"  {_G}{_B}All checks passed.{_D}")
     else:
