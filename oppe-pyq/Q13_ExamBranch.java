@@ -94,10 +94,9 @@ class Hod extends Staff {
 }
 
 public class Q13_ExamBranch {
+    // Write your solution here: Define printStaffRemunerations(Staff[] sArr)
     public static void printStaffRemunerations(Staff[] sArr) {
-        for (Staff staff : sArr) {
-            System.out.println(staff + " : " + staff.remuneration());
-        }
+        for(Staff s:sArr)System.out.println(s+" : "+s.remuneration());
     }
 
     public static void main(String[] args) {

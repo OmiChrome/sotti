@@ -65,30 +65,24 @@ async def _check_watch_dir(watch_dir: Path) -> tuple[bool, str]:
 
 async def _check_api_and_models(
     api_key: str,
-    model_a: str,
-    model_b: str,
+    ocr_model: str,
+    orchestrator_model: str,
+    code_model: str,
 ) -> list[tuple[bool, str]]:
     """
-    One models.list() call validates the API key AND both model names.
-    Runs in a thread executor so it doesn't block the event loop.
-    Returns a flat list of (ok, message) tuples:
-      [0] API key result
-      [1] orchestrator_model result
-      [2] sub_agent_model result  (may be merged with [1] if same model)
+    One models.list() call validates the API key AND all three model names.
+    Returns a flat list of (ok, message) tuples.
     """
     from google import genai
 
     def _sync() -> tuple[bool, set[str], str]:
-        """Blocking work: create client and fetch model list."""
         client = genai.Client(api_key=api_key)
-        # models.list() raises immediately if the key is bad (401/403).
         raw = list(client.models.list())
-        # Names come back as "models/gemma-4-31b-it" — normalise to bare ID.
         available = set()
         for m in raw:
-            name: str = m.name  # e.g. "models/gemma-4-31b-it"
+            name: str = m.name
             available.add(name)
-            available.add(name.split("/")[-1])   # bare ID
+            available.add(name.split("/")[-1])
         return True, available, "API key is valid"
 
     loop = asyncio.get_running_loop()
@@ -100,8 +94,9 @@ async def _check_api_and_models(
     except asyncio.TimeoutError:
         return [
             (False, "API key check timed out (>4.5 s)"),
-            (False, f"Model '{model_a}': skipped (timeout)"),
-            (False, f"Model '{model_b}': skipped (timeout)"),
+            (False, f"Model '{ocr_model}': skipped (timeout)"),
+            (False, f"Model '{orchestrator_model}': skipped (timeout)"),
+            (False, f"Model '{code_model}': skipped (timeout)"),
         ]
     except Exception as exc:
         err = str(exc)
@@ -110,25 +105,33 @@ async def _check_api_and_models(
         else:
             reason = err[:100]
         return [
-            (False, f"API key is INVALID         → {reason}"),
-            (False, f"Model '{model_a}': skipped (API error)"),
-            (False, f"Model '{model_b}': skipped (API error)"),
+            (False, f"API key is INVALID         -> {reason}"),
+            (False, f"Model '{ocr_model}': skipped (API error)"),
+            (False, f"Model '{orchestrator_model}': skipped (API error)"),
+            (False, f"Model '{code_model}': skipped (API error)"),
         ]
 
-    results: list[tuple[bool, str]] = [(True, f"API key                   → {key_msg}")]
+    results: list[tuple[bool, str]] = [(True, f"API key                   -> {key_msg}")]
 
-    def _model_result(model: str) -> tuple[bool, str]:
+    def _model_result(model: str, label: str) -> tuple[bool, str]:
         if model in available:
-            return True, f"Model '{model}' is available"
-        return False, f"Model '{model}' NOT found in available models"
+            return True, f"Model '{model}' [{label}] is available"
+        return False, f"Model '{model}' [{label}] NOT found"
 
-    # Deduplicate if both models are the same
-    if model_a == model_b:
-        ok, msg = _model_result(model_a)
-        results.append((ok, f"{msg} (orchestrator + sub-agent)"))
-    else:
-        results.append(_model_result(model_a))
-        results.append(_model_result(model_b))
+    # Deduplicate if all three are the same model
+    seen: dict[str, str] = {}
+    for model, label in [
+        (ocr_model, "ocr"),
+        (orchestrator_model, "orchestrator"),
+        (code_model, "code"),
+    ]:
+        if model in seen:
+            seen[model] += f"+{label}"
+        else:
+            seen[model] = label
+
+    for model, combined_label in seen.items():
+        results.append(_model_result(model, combined_label))
 
     return results
 
@@ -151,8 +154,9 @@ async def run_startup_checks(settings: "Settings") -> bool:
                 _check_watch_dir(settings.watch_dir),
                 _check_api_and_models(
                     settings.gemini_api_key,
+                    settings.ocr_model,
                     settings.orchestrator_model,
-                    settings.sub_agent_model,
+                    settings.code_model,
                 ),
                 return_exceptions=True,
             ),

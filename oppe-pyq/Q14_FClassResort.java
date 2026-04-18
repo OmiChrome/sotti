@@ -37,21 +37,11 @@ class Place {
 }
 
 public class Q14_FClassResort {
+    // Define getFinalList(Place p) here
     public static ArrayList<String> getFinalList(Place p) {
-        ArrayList<String> finalList = new ArrayList<String>();
-        for (Map.Entry<String, ArrayList<Integer>> entry : p.getResortMap().entrySet()) {
-            boolean allGood = true;
-            for (int rating : entry.getValue()) {
-                if (rating < 4) {
-                    allGood = false;
-                    break;
-                }
-            }
-            if (allGood) {
-                finalList.add(entry.getKey());
-            }
-        }
-        return finalList;
+        ArrayList<String> a=new ArrayList<String>();
+        for(var e:p.getResortMap().entrySet()){boolean f=true;for(int x:e.getValue())if(x<4)f=false; if(f)a.add(e.getKey());}
+        return a;
     }
 
     public static void main(String[] args) {

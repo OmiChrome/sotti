@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 from .watcher import start_watcher
-from .state import APP_STATE
+from .state import APP_STATE, load_state
 from .config import settings
 from .startup_checks import run_startup_checks
 
@@ -52,6 +52,9 @@ STATIC_DIR = BASE_DIR / "static"
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
+    # --- Restore persisted state ---
+    load_state()
+
     # --- Sanity checks (parallel, ≤5 s) ---
     await run_startup_checks(settings)
 
@@ -107,9 +110,13 @@ class ConnectionManager:
         self._connections.append(ws)
         log.info("Frontend connected  (total: %d)", len(self._connections))
 
-        # Immediately hydrate the new client with the current global state.
+        # Immediately hydrate the new client with current global state.
         try:
-            await ws.send_json({"type": "init", "state": APP_STATE})
+            await ws.send_json({"type": "init", "state": {
+                "current": APP_STATE.get("current", ""),
+                "current_question_title": APP_STATE.get("current_question_title"),
+                "current_question_dir": APP_STATE.get("current_question_dir"),
+            }})
         except Exception as exc:
             log.warning("Could not send init state to new client: %s", exc)
 

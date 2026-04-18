@@ -36,15 +36,13 @@ class Rectangle<T extends Number> {
         length = len;
         breadth = bre;
     }
-    public double area() {
-        return length.doubleValue() * breadth.doubleValue();
-    }
-    public double compareArea(Rectangle<?> rec) {
-        return Math.max(area(), rec.area());
-    }
+    // Define method: public double area() here
+    public double area(){return length.doubleValue()*breadth.doubleValue();}
+    // Define method: compareArea() here
+    public double compareArea(Rectangle<?> r){return Math.max(area(),r.area());}
 }
 
-public class Q9_Rectangle {
+public class Q9_Test {
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
         Rectangle<Integer> r1 = new Rectangle<>(sc.nextInt(), sc.nextInt());

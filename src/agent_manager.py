@@ -1,12 +1,17 @@
 """
-agent_manager.py — Sotti Phase 6
-Phase 2 & 3: Extracts question-pack and generates Java solution in one go.
-Phase 6: Includes OCR fallback, smart question tracking by title to save compute,
-         and proactive status broadcasting for the UI ticker.
+agent_manager.py — Sotti (Architecture v2)
+
+Three-phase pipeline:
+  Phase A  — OCR_MODEL    : image pack → question.md
+  Phase B  — ORCHESTRATOR : classifies image (new question vs debug), builds code plan
+  Phase C  — CODE_MODEL   : generates Java, verifies locally (up to _MAX_RETRIES)
+
+Debug loop:
+  Single screenshot → ORCHESTRATOR decides it's debug → CODE_MODEL re-iterates.
 """
 
-import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Callable, Any
@@ -18,358 +23,554 @@ from PIL import Image
 from .config import settings
 from . import verifier
 from .state import APP_STATE, save_state
-from .data_logger import DataLogger
 
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# System prompts
+# PYQ knowledge base — loaded once at import time
 # ---------------------------------------------------------------------------
 
-_ORCHESTRATOR_SYSTEM_PROMPT = """\
-You are an advanced data extraction agent operating in a two-part workflow. \
-You will be provided with screenshots of a coding examination portal. \
-The screen is split into two panes: the Question (Left) and the Stub Code (Right).
-Your task is to extract information from both panes and output a STRICT, valid JSON object.
+def _load_pyq_context() -> str:
+    """Read all .java files from oppe-pyq/ and return as a compact string."""
+    pyq_dir: Path = settings.oppe_pyq_dir
+    if not pyq_dir.is_dir():
+        log.warning("oppe-pyq dir not found: %s", pyq_dir)
+        return ""
+    parts: list[str] = []
+    for jf in sorted(pyq_dir.glob("*.java")):
+        parts.append(f"=== {jf.name} ===\n{jf.read_text(encoding='utf-8', errors='replace')}")
+    joined = "\n\n".join(parts)
+    log.info("Loaded %d PYQ files (%d chars)", len(parts), len(joined))
+    return joined
 
-### Part 1: Question Extraction (Intelligent Mode)
-Read the left pane. Extract the title, the core problem statement, and all visible \
-test cases (Inputs and Expected Outputs).
+_PYQ_CONTEXT: str = _load_pyq_context()
 
-### Part 2: Stub Code Extraction (Strict OCR Mode)
-Read the right pane. You are now functioning as a dumb, literal OCR engine.
-CRITICAL RULES FOR STUB CODE:
-- Transcribe the code EXACTLY character-for-character as it appears in the image.
-- DO NOT fix missing semicolons, syntax errors, or typos.
-- DO NOT format or indent the code differently than the image.
-- DO NOT remove or answer the placeholder comments \
-(e.g., "// Write your solution here" or "// Define constructor here").
-- DO NOT complete the code. Only output what is visible on the screen.
+# ---------------------------------------------------------------------------
+# System prompts (concise, direct)
+# ---------------------------------------------------------------------------
 
-### EXAMPLE JSON OUTPUT FORMAT:
-{
-  "title": "Inheritance - Doctor and Surgeon",
-  "question": "A hospital management system maintains records of doctors...",
-  "test_cases": [{"input": "...", "expected_output": "..."}],
-  "stub_code": "class Doctor {\\n    private String name;\\n// Define constructor here\\n}\\n\\nclass Surgeon extends Doctor {\\n// Define constructor here\\n}"
-}\
-"""
+_OCR_PROMPT = """\
+You are an OCR engine reading an OPPE Java exam portal screenshot.
 
-_SUB_AGENT_SYSTEM_PROMPT = """\
-You are a Java expert. You will be given a coding question pack (JSON) that contains \
-the problem title, problem statement, test cases, and stub code from an exam portal.
+Output ONLY a markdown file in this exact format — no extra text:
 
-Your task is to produce a complete, correct Java solution.
+# <Question Title>
 
-Output STRICT JSON with EXACTLY two keys:
-  "block"     — ONLY the minimal code required to be typed into the portal's \
-placeholder (no surrounding class/method shell unless the placeholder is a whole class).
-  "full_file" — The complete, compilable Java file including all necessary imports \
-and the block injected into the stub code, so it can be compiled and run locally \
-with `java Solution.java`. The class must be named Solution.
+## Problem Statement
+<full problem text>
+
+## Test Cases
+| # | Input | Expected Output |
+|---|-------|-----------------|
+| 1 | <input> | <expected output> |
+
+## Stub Code
+```java
+<exact stub code, character-for-character — DO NOT fix or complete it>
+```
 
 Rules:
-- Return ONLY the JSON object. No markdown fences. No extra text.
-- The full_file MUST compile cleanly with standard javac / java (Java 11+).
-- Use a public class named Solution as the top-level class.
-\
+- Left pane = question. Right pane = stub code.
+- Copy stub code EXACTLY as shown. Preserve placeholder comments like "// Write here".
+- If multiple test cases exist, list all of them.
+"""
+
+_ORCHESTRATOR_NEW_PROMPT = """\
+You are an orchestrator for a Java exam assistant.
+
+You will receive a question.md file. Your job: write a SHORT, direct instruction for the CODE_MODEL.
+
+Tell it:
+1. What to implement (be specific — method signatures, class names, return types)
+2. Which previous year question it most resembles (if any) from the PYQ list below
+3. Any tricky edge cases from the test cases
+
+Be concise. No code. Max 150 words.
+
+--- PREVIOUS YEAR QUESTIONS (for reference) ---
+{pyq_context}
+"""
+
+_ORCHESTRATOR_DEBUG_PROMPT = """\
+You are analyzing a debug screenshot from a Java exam portal.
+
+Extract and return ONLY the error text / debug output visible in the image.
+Then add one sentence explaining the likely root cause.
+Format:
+ERROR: <extracted error text>
+CAUSE: <one-sentence diagnosis>
+"""
+
+_ORCHESTRATOR_CLASSIFY_PROMPT = """\
+You are given one screenshot. Decide in ONE WORD:
+- "NEW" if it shows a full coding question (problem statement + stub code visible)
+- "DEBUG" if it shows only a debug/error window, console output, or partial screen
+
+Reply with exactly one word: NEW or DEBUG
+"""
+
+_CODE_MODEL_PROMPT = """\
+You are a Java expert solving OPPE exam questions.
+
+Given the question.md and orchestrator instructions, produce a compilable Java solution.
+
+Output STRICT JSON with exactly two keys:
+  "block"     — ONLY the code to type into the stub placeholder (no class shell unless stub is empty)
+  "full_file" — Complete compilable Java file. Class must be named Solution. Use `java Solution.java` format (Java 11+).
+
+Rules:
+- Return ONLY the JSON. No markdown. No explanation.
+- full_file MUST compile with `java Solution.java`.
+- Keep it minimal: inline lambdas, compact loops, one-liners where readable.
+- Match exact output format from test cases (spacing, punctuation).
+"""
+
+_CODE_FIX_PROMPT = """\
+Your previous solution failed. Fix it.
+
+Error:
+{error}
+
+Return ONLY the JSON with "block" and "full_file". No explanation.
 """
 
 # ---------------------------------------------------------------------------
-# Lazy-initialised Gemini client
+# Gemini client (lazy, with fallback)
 # ---------------------------------------------------------------------------
 
 _client: genai.Client | None = None
 _fallback_client: genai.Client | None = None
 
+
 def _get_client(use_fallback: bool = False) -> genai.Client:
     global _client, _fallback_client
     if use_fallback:
         if not settings.gemini_api_key_fallback:
-            raise ValueError("Fallback requested but gemini_api_key_fallback is not configured.")
+            raise ValueError("Fallback requested but GEMINI_API_KEY_FALLBACK not set.")
         if _fallback_client is None:
             _fallback_client = genai.Client(api_key=settings.gemini_api_key_fallback)
-            log.info("Gemini fallback client initialised.")
         return _fallback_client
-
     if _client is None:
         _client = genai.Client(api_key=settings.gemini_api_key)
-        log.info("Gemini primary client initialised.")
     return _client
 
-def _generate_with_fallback(model: str, contents: list, config: types.GenerateContentConfig) -> Any:
-    client = _get_client()
-    try:
-        return client.models.generate_content(model=model, contents=contents, config=config)
-    except Exception as e:
-        error_msg = str(e)
-        if "429" in error_msg or "503" in error_msg:
-            if settings.gemini_api_key_fallback:
-                log.warning("API key hit rate limit/error: %s. Switching to fallback key...", error_msg[:50])
-                fallback_client = _get_client(use_fallback=True)
-                return fallback_client.models.generate_content(model=model, contents=contents, config=config)
-            else:
-                log.warning("API key hit rate limit/error (%s), but no fallback key configured.", error_msg[:50])
-        raise
+
+def _call(model: str, contents: list, system: str, json_out: bool = False, temperature: float = 0.1) -> str:
+    """Call Gemini with automatic fallback on rate-limit errors."""
+    cfg = types.GenerateContentConfig(
+        system_instruction=system,
+        response_mime_type="application/json" if json_out else "text/plain",
+        temperature=temperature,
+    )
+    for use_fb in (False, True):
+        try:
+            resp = _get_client(use_fb).models.generate_content(
+                model=model, contents=contents, config=cfg
+            )
+            return resp.text or ""
+        except Exception as e:
+            err = str(e)
+            if use_fb or ("429" not in err and "503" not in err) or not settings.gemini_api_key_fallback:
+                raise
+            log.warning("Rate limit on primary key, switching to fallback...")
+    return ""
 
 # ---------------------------------------------------------------------------
-# Broadcast helper type
+# Helpers
 # ---------------------------------------------------------------------------
 
-# A sync callable that schedules a broadcast on the asyncio loop.
-# Provided by watcher._sync_broadcast so it's safe to call from a thread.
 BroadcastFn = Callable[[dict], None]
 
-
-# ---------------------------------------------------------------------------
-# Phase 3 / 6 — Full AI Pipeline (OCR + Code Generation)
-# ---------------------------------------------------------------------------
-
 _MAX_RETRIES = 3
+
+
+def _emit(broadcast: BroadcastFn | None, payload: dict) -> None:
+    if broadcast is None:
+        return
+    try:
+        broadcast(payload)
+    except Exception as exc:
+        log.debug("Broadcast failed: %s", exc)
+
+
+def _slug(text: str, max_len: int = 48) -> str:
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_]+", "-", text.strip())
+    return text[:max_len] or "unknown"
+
+
+def _load_images(image_paths: list[str]) -> list[Image.Image]:
+    images: list[Image.Image] = []
+    for p in image_paths:
+        path = Path(p)
+        if path.exists():
+            images.append(Image.open(path))
+        else:
+            log.warning("Image not found, skipping: %s", p)
+    if not images:
+        raise RuntimeError("No valid images in batch.")
+    return images
+
+
+def _question_dir(title: str) -> Path:
+    slug = _slug(title)
+    d = settings.data_dir / slug
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+# ---------------------------------------------------------------------------
+# Phase A — OCR
+# ---------------------------------------------------------------------------
+
+def _phase_ocr(image_paths: list[str], broadcast: BroadcastFn | None) -> tuple[str, Path]:
+    """Returns (question_md_text, question_dir_path)."""
+    _emit(broadcast, {"type": "status", "message": "OCR in progress…"})
+    t0 = time.monotonic()
+
+    images = _load_images(image_paths)
+    contents: list = images + [
+        "Extract the question pack from these exam screenshots. "
+        "Output ONLY the markdown as instructed — no extra text."
+    ]
+
+    raw = _call(settings.ocr_model, contents, _OCR_PROMPT, json_out=False, temperature=0.05)
+    log.info("[OCR] done in %.1fs (%d chars)", time.monotonic() - t0, len(raw))
+
+    # Extract title from first # heading
+    title_match = re.search(r"^#\s+(.+)", raw, re.MULTILINE)
+    title = title_match.group(1).strip() if title_match else "question"
+
+    # Write question.md
+    q_dir = _question_dir(title)
+    (q_dir / "question.md").write_text(raw, encoding="utf-8")
+    (q_dir / "ocr_raw.txt").write_text(raw, encoding="utf-8")
+    log.info("[OCR] Wrote question.md → %s", q_dir)
+
+    # Update global state
+    APP_STATE["current_question_dir"] = str(q_dir)
+    APP_STATE["current_question_title"] = title
+    save_state()
+
+    # Parse stub preview for frontend
+    stub_match = re.search(r"```java\n(.*?)```", raw, re.DOTALL)
+    stub_preview = stub_match.group(1)[:300] if stub_match else raw[:300]
+
+    _emit(broadcast, {
+        "type": "ocr",
+        "title": title,
+        "block": f"// ✓ OCR Complete — {title}\n// Generating solution…\n\n{stub_preview}",
+    })
+
+    return raw, q_dir
+
+# ---------------------------------------------------------------------------
+# Phase B — Orchestrator (new question path)
+# ---------------------------------------------------------------------------
+
+def _phase_orchestrate_new(question_md: str) -> str:
+    """Returns orchestrator instructions for CODE_MODEL."""
+    t0 = time.monotonic()
+    system = _ORCHESTRATOR_NEW_PROMPT.format(pyq_context=_PYQ_CONTEXT)
+    result = _call(settings.orchestrator_model, [question_md], system, json_out=False, temperature=0.1)
+    log.info("[ORCH] instructions ready in %.1fs", time.monotonic() - t0)
+    return result
+
+# ---------------------------------------------------------------------------
+# Phase B — Orchestrator (debug path)
+# ---------------------------------------------------------------------------
+
+def _phase_orchestrate_debug(images: list[Image.Image]) -> str:
+    """Returns extracted error text + cause from a debug screenshot."""
+    t0 = time.monotonic()
+    contents: list = images + ["Analyze the debug output in this screenshot."]
+    result = _call(settings.orchestrator_model, contents, _ORCHESTRATOR_DEBUG_PROMPT, json_out=False, temperature=0.05)
+    log.info("[ORCH-DEBUG] error extracted in %.1fs", time.monotonic() - t0)
+    return result
+
+# ---------------------------------------------------------------------------
+# Image classification (single image: new question or debug?)
+# ---------------------------------------------------------------------------
+
+def _classify_image(image: Image.Image) -> str:
+    """Returns 'NEW' or 'DEBUG'."""
+    t0 = time.monotonic()
+    result = _call(
+        settings.orchestrator_model,
+        [image, "Is this a full coding question or a debug window?"],
+        _ORCHESTRATOR_CLASSIFY_PROMPT,
+        json_out=False,
+        temperature=0.0,
+    )
+    decision = result.strip().upper()
+    decision = "DEBUG" if "DEBUG" in decision else "NEW"
+    log.info("[CLASSIFY] %.1fs → %s", time.monotonic() - t0, decision)
+    return decision
+
+# ---------------------------------------------------------------------------
+# Phase C — Code generation + verification loop
+# ---------------------------------------------------------------------------
+
+def _parse_test_cases(question_md: str) -> list[dict]:
+    """Extract test cases from question.md table."""
+    cases: list[dict] = []
+    in_table = False
+    for line in question_md.splitlines():
+        if "| # |" in line or "| Input |" in line:
+            in_table = True
+            continue
+        if in_table and line.startswith("|---"):
+            continue
+        if in_table and line.startswith("|"):
+            cols = [c.strip() for c in line.strip("|").split("|")]
+            if len(cols) >= 3:
+                cases.append({
+                    "input": cols[1].replace("\\n", "\n"),
+                    "expected_output": cols[2].replace("\\n", "\n"),
+                })
+        elif in_table:
+            break
+    return cases
+
+
+def _phase_code_gen(
+    question_md: str,
+    orch_instructions: str,
+    q_dir: Path,
+    broadcast: BroadcastFn | None,
+    extra_context: str = "",
+) -> dict:
+    """
+    Runs the code-gen + verify loop.
+    Returns {"block": str, "hint": str, "verified": bool}.
+    """
+    import json
+
+    test_cases = _parse_test_cases(question_md)
+    log.info("[CODE] %d test case(s) extracted", len(test_cases))
+
+    user_msg = (
+        f"## Question\n{question_md}\n\n"
+        f"## Orchestrator Instructions\n{orch_instructions}\n"
+    )
+    if extra_context:
+        user_msg += f"\n## Additional Context\n{extra_context}\n"
+    user_msg += "\nSolve it. Return ONLY the strict JSON."
+
+    history: list[types.Content] = []
+    last_block = ""
+    last_hint = ""
+    verified = False
+
+    for attempt in range(1, _MAX_RETRIES + 1):
+        _emit(broadcast, {"type": "status", "message": f"Code gen attempt {attempt}/{_MAX_RETRIES}…"})
+        log.info("[CODE] attempt %d/%d", attempt, _MAX_RETRIES)
+        t_a = time.monotonic()
+
+        prompt = user_msg if attempt == 1 else _CODE_FIX_PROMPT.format(error=last_hint)
+        current = list(history) + [
+            types.Content(role="user", parts=[types.Part(text=prompt)])
+        ]
+
+        try:
+            raw = _call(settings.code_model, current, _CODE_MODEL_PROMPT, json_out=True, temperature=0.15)
+        except Exception as e:
+            log.warning("[CODE] API error attempt %d: %s", attempt, e)
+            last_hint = str(e)
+            continue
+
+        log.info("[CODE] model responded in %.1fs", time.monotonic() - t_a)
+
+        # Save attempt response
+        (q_dir / f"attempt_{attempt}_response.json").write_text(raw, encoding="utf-8")
+
+        try:
+            solution = json.loads(raw)
+            block: str = solution.get("block", "")
+            full_file: str = solution.get("full_file", "")
+        except Exception as exc:
+            log.warning("[CODE] JSON parse error: %s", exc)
+            last_block = raw
+            last_hint = f"JSON parse error: {exc}\nRaw: {raw[:200]}"
+            _append_history(history, "model", raw)
+            _append_history(history, "user", _CODE_FIX_PROMPT.format(error=last_hint))
+            (q_dir / f"attempt_{attempt}_verify.txt").write_text(f"FAIL\n{last_hint}", encoding="utf-8")
+            continue
+
+        last_block = block
+
+        if not full_file:
+            last_hint = "full_file was empty."
+            (q_dir / f"attempt_{attempt}_verify.txt").write_text(f"FAIL\n{last_hint}", encoding="utf-8")
+            _append_history(history, "model", raw)
+            _append_history(history, "user", _CODE_FIX_PROMPT.format(error=last_hint))
+            continue
+
+        # Write Solution.java to question directory
+        (q_dir / "Solution.java").write_text(full_file, encoding="utf-8")
+
+        # Verify
+        t_v = time.monotonic()
+        ok, output = verifier.verify_java_code(full_file, work_dir=q_dir, test_cases=test_cases)
+        log.info("[VERIFY] attempt %d: %s (%.1fs)", attempt, "PASS" if ok else "FAIL", time.monotonic() - t_v)
+        (q_dir / f"attempt_{attempt}_verify.txt").write_text(
+            f"{'PASS' if ok else 'FAIL'}\n{output}", encoding="utf-8"
+        )
+
+        if ok:
+            verified = True
+            last_hint = f"✓ Verified | {APP_STATE.get('current_question_title', '')} | {len(test_cases)} test case(s)"
+            break
+        else:
+            last_hint = output
+            _append_history(history, "model", raw)
+            _append_history(history, "user", _CODE_FIX_PROMPT.format(error=output[:800]))
+
+    if not verified:
+        last_hint = "⚠ Unverified — " + last_hint[:200]
+
+    # Persist state
+    APP_STATE["current"] = last_block
+    title = APP_STATE.get("current_question_title") or ""
+    if title and verified:
+        stub_match = re.search(r"```java\n(.*?)```", question_md, re.DOTALL)
+        stub_code = stub_match.group(1) if stub_match else ""
+        APP_STATE["solved_questions"][title] = {"block": last_block, "stub_code": stub_code}
+    save_state()
+
+    # Write summary
+    summary = {
+        "title": title,
+        "verified": verified,
+        "attempts": _MAX_RETRIES,
+        "hint": last_hint,
+        "block_chars": len(last_block),
+    }
+    import json as _json
+    (q_dir / "session_summary.json").write_text(_json.dumps(summary, indent=2), encoding="utf-8")
+
+    return {"block": last_block, "hint": last_hint, "verified": verified}
+
+
+def _append_history(history: list, role: str, text: str) -> None:
+    history.append(types.Content(role=role, parts=[types.Part(text=text)]))
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def generate_and_verify_solution(
     image_paths: list[str],
     broadcast: BroadcastFn | None = None,
 ) -> dict | None:
     """
-    1) Extracts the question pack using the orchestrator (or sub_agent fallback).
-    2) Checks APP_STATE["solved_questions"] to avoid redundant generation.
-    3) Generates a Java solution, verifying locally up to _MAX_RETRIES times.
+    Full pipeline for a new image pack (multiple images or single classified as NEW).
+
+    1. OCR → question.md
+    2. Orchestrate → instructions
+    3. Code gen + verify loop
+    4. Broadcast solution to frontend
+
+    Returns {"block", "hint"} or None if question already solved unchanged.
     """
-    import asyncio
+    log.info("▶ NEW QUESTION pipeline | images=%s", [Path(p).name for p in image_paths])
+    t_total = time.monotonic()
 
-    def _emit(payload: dict) -> None:
-        """Fire-and-forget sync shim. Guards against closed/stopped event loop."""
-        if broadcast is None:
-            return
-        try:
-            broadcast(payload)
-        except Exception as exc:
-            log.warning("Broadcast emit failed: %s", exc)
+    # Phase A
+    question_md, q_dir = _phase_ocr(image_paths, broadcast)
 
-    log.info("  [OCR] Starting OCR stage...")
-    _emit({"type": "status", "message": "Doing OCR..."})
-    t0 = time.monotonic()
-
-    if not image_paths:
-        raise ValueError("image_paths must not be empty")
-
-    parts: list = []
-    for raw_path in image_paths:
-        path = Path(raw_path)
-        if not path.exists():
-            log.warning("Image not found, skipping: %s", path)
-            continue
-        parts.append(Image.open(path))
-
-    if not parts:
-        raise RuntimeError("No valid images could be loaded from the batch.")
-
-    # Initialise DataLogger with a temporary title; renamed after OCR extracts the real one.
-    dl = DataLogger(title="ocr-pending")
-    dl.log_ocr_images(image_paths)
-
-    parts.append(
-        "Extract the question pack from the screenshot(s) above. "
-        "Return ONLY the JSON object — no markdown fences, no extra text."
-    )
-
-    log.info("  [OCR] Sending %d image(s) to model=%s ...", len(image_paths), settings.orchestrator_model)
-
-    try:
-        t_api = time.monotonic()
-        ocr_model_used = settings.orchestrator_model
-        response = _generate_with_fallback(
-            model=ocr_model_used,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                system_instruction=_ORCHESTRATOR_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
-        log.info("  [OCR] Model responded in %.1fs", time.monotonic() - t_api)
-    except Exception as e:
-        log.warning("  [OCR] Failed with %s in %.1fs: %s. Trying fallback model=%s ...",
-                    settings.orchestrator_model, time.monotonic() - t_api, e, settings.sub_agent_model)
-        _emit({"type": "status", "message": f"OCR fallback, using {settings.sub_agent_model}..."})
-        t_api = time.monotonic()
-        ocr_model_used = settings.sub_agent_model
-        response = _generate_with_fallback(
-            model=ocr_model_used,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                system_instruction=_ORCHESTRATOR_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.1,
-            ),
-        )
-        log.info("  [OCR] Fallback responded in %.1fs", time.monotonic() - t_api)
-
-    raw_text: str = response.text or ""
-
-    try:
-        question_pack = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"OCR Model returned invalid JSON: {exc}\n{raw_text[:200]}") from exc
-
-    title = question_pack.get("title", "")
-    stub_code = question_pack.get("stub_code", "")
-    log.info("  [OCR] Extracted title=%r  stub_code_len=%d  elapsed=%.1fs",
-             title, len(stub_code), time.monotonic() - t0)
-
-    # Re-create DataLogger now that we have the real title for a readable folder name.
-    dl = DataLogger(title=title or "unknown")
-    dl.log_ocr_images(image_paths)
-    dl.log_ocr_response(ocr_model_used, raw_text, question_pack)
-
-    ocr_visual = f"// OCR Title: {title}\n"
-    cases = question_pack.get("test_cases", [])
-    if cases:
-        ocr_visual += f"// Extracted {len(cases)} test cases.\n"
-    ocr_visual += f"\n{stub_code}"
-    _emit({"type": "ocr", "block": ocr_visual})
-
-    # Check solved_questions state
+    # Dedup check
+    title = APP_STATE.get("current_question_title", "")
+    stub_match = re.search(r"```java\n(.*?)```", question_md, re.DOTALL)
+    stub_code = stub_match.group(1) if stub_match else ""
     if title and title in APP_STATE["solved_questions"]:
-        solved_info = APP_STATE["solved_questions"][title]
-        # if the stub code is the same, abort to save compute
-        if solved_info.get("stub_code") == stub_code:
-            _emit({"type": "status", "message": "Question already solved."})
-            log.info("Question '%s' already solved and stub unchanged. Aborting.", title)
+        prev = APP_STATE["solved_questions"][title]
+        if prev.get("stub_code") == stub_code:
+            _emit(broadcast, {"type": "status", "message": "Question already solved."})
+            log.info("Question '%s' already solved — skipping.", title)
             return None
 
-    _emit({"type": "status", "message": "Generating code..."})
-    log.info("  [GEN] Starting code generation (model=%s, max_retries=%d)...",
-             settings.sub_agent_model, _MAX_RETRIES)
-    t1 = time.monotonic()
+    # Phase B
+    _emit(broadcast, {"type": "status", "message": "Orchestrating…"})
+    orch_instructions = _phase_orchestrate_new(question_md)
+    (q_dir / "orchestrator_plan.txt").write_text(orch_instructions, encoding="utf-8")
 
-    user_prompt = (
-        "Here is the question pack (JSON):\n"
-        + json.dumps(question_pack, indent=2)
-        + "\n\nSolve it. Return ONLY the strict JSON with 'block' and 'full_file' keys."
+    # Phase C
+    result = _phase_code_gen(question_md, orch_instructions, q_dir, broadcast)
+
+    log.info("▶ DONE | verified=%s | elapsed=%.1fs", result["verified"], time.monotonic() - t_total)
+    return {"block": result["block"], "hint": result["hint"]}
+
+
+def process_debug_screenshot(
+    image_paths: list[str],
+    broadcast: BroadcastFn | None = None,
+) -> dict | None:
+    """
+    Debug loop: single screenshot with error/debug output.
+
+    1. ORCHESTRATOR extracts error text from image
+    2. CODE_MODEL re-iterates with error as context
+    3. Broadcast updated solution
+
+    Returns {"block", "hint"} or None on failure.
+    """
+    log.info("▶ DEBUG pipeline | images=%s", [Path(p).name for p in image_paths])
+    t_total = time.monotonic()
+
+    _emit(broadcast, {"type": "status", "message": "Analyzing debug screenshot…"})
+
+    q_dir_str = APP_STATE.get("current_question_dir")
+    if not q_dir_str:
+        log.warning("[DEBUG] No active question dir — cannot debug.")
+        _emit(broadcast, {"type": "error", "message": "No active question to debug."})
+        return None
+
+    q_dir = Path(q_dir_str)
+    question_md_path = q_dir / "question.md"
+    if not question_md_path.exists():
+        log.warning("[DEBUG] question.md not found in %s", q_dir)
+        _emit(broadcast, {"type": "error", "message": "question.md not found for active question."})
+        return None
+
+    question_md = question_md_path.read_text(encoding="utf-8")
+
+    # Extract error from debug screenshot
+    images = _load_images(image_paths)
+    error_analysis = _phase_orchestrate_debug(images)
+    log.info("[DEBUG] Error analysis:\n%s", error_analysis[:300])
+
+    # Reload orchestrator plan if available
+    orch_plan_path = q_dir / "orchestrator_plan.txt"
+    orch_instructions = orch_plan_path.read_text(encoding="utf-8") if orch_plan_path.exists() else ""
+
+    # Re-run code gen with debug context
+    result = _phase_code_gen(
+        question_md,
+        orch_instructions,
+        q_dir,
+        broadcast,
+        extra_context=f"Previous attempt produced this error:\n{error_analysis}",
     )
 
-    history: list[types.Content] = []
-    last_block: str = ""
-    last_hint: str = ""
-    verified = False
+    log.info("▶ DEBUG DONE | verified=%s | elapsed=%.1fs", result["verified"], time.monotonic() - t_total)
+    return {"block": result["block"], "hint": result["hint"]}
 
-    for attempt in range(1, _MAX_RETRIES + 1):
-        log.info("  [GEN] Attempt %d/%d — calling model...", attempt, _MAX_RETRIES)
-        _emit({"type": "status", "message": f"Code gen attempt {attempt}/{_MAX_RETRIES}..."})
-        t_attempt = time.monotonic()
 
-        current_contents: list = list(history) + [
-            types.Content(
-                role="user",
-                parts=[types.Part(text=user_prompt if attempt == 1 else _fix_prompt(last_stderr=last_hint))],
-            )
-        ]
+def classify_and_route(
+    image_paths: list[str],
+    broadcast: BroadcastFn | None = None,
+) -> dict | None:
+    """
+    Entry point for SINGLE image batches.
+    Orchestrator decides NEW vs DEBUG, then routes appropriately.
+    """
+    images = _load_images(image_paths)
+    _emit(broadcast, {"type": "status", "message": "Classifying image…"})
 
-        # Log the request (snapshot the text parts only — images are already logged)
-        dl.log_gen_request(
-            attempt,
-            settings.sub_agent_model,
-            [p.text for c in current_contents for p in c.parts if hasattr(p, "text") and p.text],
-        )
+    decision = _classify_image(images[0])
 
-        response = _generate_with_fallback(
-            model=settings.sub_agent_model,
-            contents=current_contents,
-            config=types.GenerateContentConfig(
-                system_instruction=_SUB_AGENT_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                temperature=0.2,
-            ),
-        )
-
-        raw_text: str = response.text or ""
-        log.info("  [GEN] Attempt %d/%d responded in %.1fs", attempt, _MAX_RETRIES, time.monotonic() - t_attempt)
-
-        try:
-            solution = json.loads(raw_text)
-            block: str = solution.get("block", "")
-            full_file: str = solution.get("full_file", "")
-        except json.JSONDecodeError as exc:
-            log.warning("Sub-agent returned non-JSON on attempt %d: %s", attempt, exc)
-            last_block = raw_text
-            last_hint = f"JSON parse error: {exc}"
-            dl.log_gen_response(attempt, raw_text, None)
-            dl.log_verify_result(attempt, False, f"JSON parse error: {exc}")
-            _append_to_history(history, role="model", text=raw_text)
-            _append_to_history(history, role="user", text=_fix_prompt(last_stderr=last_hint))
-            continue
-
-        last_block = block
-        dl.log_gen_response(attempt, raw_text, {"block": block, "full_file": full_file})
-
-        log.info("  [VERIFY] Attempt %d/%d — compiling full_file (%d chars)...",
-                 attempt, _MAX_RETRIES, len(full_file))
-        t_verify = time.monotonic()
-
-        if full_file:
-            ok, output = verifier.verify_java_code(full_file)
-        else:
-            ok, output = False, "full_file was empty; cannot verify."
-
-        dl.log_verify_result(attempt, ok, output)
-
-        if ok:
-            log.info("  [VERIFY] PASSED on attempt %d in %.1fs", attempt, time.monotonic() - t_verify)
-            last_hint = _build_hint(question_pack, ok=True)
-            verified = True
-            break
-        else:
-            err_snippet = output[:300]
-            log.warning("  [VERIFY] FAILED on attempt %d in %.1fs: %s",
-                        attempt, time.monotonic() - t_verify, err_snippet)
-            last_hint = output
-
-            _append_to_history(history, role="model", text=raw_text)
-            _append_to_history(history, role="user", text=_fix_prompt(last_stderr=output))
-
-    if not verified:
-        log.warning("  [GEN] All %d attempts failed in %.1fs. Returning best-effort.",
-                    _MAX_RETRIES, time.monotonic() - t1)
-        last_hint = "WARNING: Failed local verification — " + last_hint[:200]
+    if decision == "DEBUG" and APP_STATE.get("current_question_dir"):
+        return process_debug_screenshot(image_paths, broadcast)
     else:
-        log.info("  [GEN] Solution verified in %.1fs total.", time.monotonic() - t1)
-        APP_STATE["current"] = last_block
-        if title:
-            APP_STATE["solved_questions"][title] = {
-                "block": last_block,
-                "stub_code": stub_code
-            }
-        save_state()
-
-    dl.log_final(last_block, last_hint, verified)
-    log.info("  [DATA] Session saved → %s", dl.session_dir)
-    return {"block": last_block, "hint": last_hint}
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _fix_prompt(last_stderr: str) -> str:
-    return (
-        "Your previous solution failed to compile/run. "
-        "Here is the compiler error:\n\n"
-        f"{last_stderr}\n\n"
-        "Fix ONLY the error. Return ONLY the strict JSON with 'block' and 'full_file' keys."
-    )
-
-def _append_to_history(
-    history: list[types.Content], role: str, text: str
-) -> None:
-    history.append(
-        types.Content(role=role, parts=[types.Part(text=text)])
-    )
-
-def _build_hint(question_pack: dict, *, ok: bool) -> str:
-    title = question_pack.get("title", "Unknown")
-    cases = question_pack.get("test_cases", [])
-    n = len(cases)
-    status = "✓ Verified locally" if ok else "⚠ Unverified"
-    return f"{status} | {title} | {n} test case{'s' if n != 1 else ''}"
+        # Either NEW or no active question for debug
+        return generate_and_verify_solution(image_paths, broadcast)

@@ -49,30 +49,22 @@ class WaterBody {
     public WaterBody(String n) {
         name = n;
     }
-    public void display() {
-        System.out.println("Inside an anonymous body of water");
-    }
-    public String getName() {
-        return name;
-    }
+    // Define method display
+    public void display(){System.out.println("Inside an anonymous body of water");}
+    // Define an accessor method getName()
+    public String getName(){return name;}
 }
 
+// Define class River
 class River extends WaterBody {
-    public River(String name) {
-        super(name);
-    }
-    public void display() {
-        System.out.println("Inside river " + getName());
-    }
+    River(String n){super(n);}
+    public void display(){System.out.println("Inside river "+getName());}
 }
 
+// Define class Lake
 class Lake extends WaterBody {
-    public Lake(String name) {
-        super(name);
-    }
-    public void display() {
-        System.out.println("Inside lake " + getName());
-    }
+    Lake(String n){super(n);}
+    public void display(){System.out.println("Inside lake "+getName());}
 }
 
 public class Q10_DispatchEx {

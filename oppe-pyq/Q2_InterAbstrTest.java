@@ -27,32 +27,32 @@ import java.util.Scanner;
  */
 
 interface IResearchScholar {
-    public void teaches(String str);
-    public void studies(String str);
+    // Define: public void teaches(String str);
+    // Define: public void studies(String str);
+    void teaches(String str);
+    void studies(String str);
 }
 
+// Define abstract class JuniorRS implements IResearchScholar
 abstract class JuniorRS implements IResearchScholar {
-    public void studies(String str) {
-        System.out.println("TA studies " + str);
-    }
+    public void studies(String s){System.out.println("TA studies "+s);}
 }
 
+// Define class SeniorRS extends JuniorRS
 class SeniorRS extends JuniorRS {
-    public void teaches(String str) {
-        System.out.println("TA teaches " + str);
-    }
+    public void teaches(String s){System.out.println("TA teaches "+s);}
 }
 
-public class Q2_InterAbstrTest extends SeniorRS {
+public class Q2_InterAbstrTest {
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
         String str1 = sc.nextLine();
         String str2 = sc.nextLine();
-        JuniorRS jrs = new Q2_InterAbstrTest();
-        SeniorRS srs = new Q2_InterAbstrTest();
-        jrs.studies(str1);
-        srs.studies(str2);
-        srs.teaches(str2);
+        // JuniorRS jrs = new InterAbstrTest(); -- uncomment after defining classes
+        // SeniorRS srs = new InterAbstrTest();
+        // jrs.studies(str1);
+        // srs.studies(str2);
+        // srs.teaches(str2);
         sc.close();
     }
 }

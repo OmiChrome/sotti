@@ -40,21 +40,11 @@ class Team {
 }
 
 public class Q4_FClass {
+    // Define the method getFinalList() here
     public static ArrayList<String> getFinalList(Team t) {
-        ArrayList<String> finalList = new ArrayList<String>();
-        for (Map.Entry<String, ArrayList<Integer>> entry : t.getPlayerMap().entrySet()) {
-            boolean allGood = true;
-            for (int run : entry.getValue()) {
-                if (run < 80) {
-                    allGood = false;
-                    break;
-                }
-            }
-            if (allGood) {
-                finalList.add(entry.getKey());
-            }
-        }
-        return finalList;
+        ArrayList<String> a=new ArrayList<String>();
+        for(var e:t.getPlayerMap().entrySet()){boolean f=true;for(int x:e.getValue())if(x<80)f=false; if(f)a.add(e.getKey());}
+        return a;
     }
 
     public static void main(String[] args) {

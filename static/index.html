@@ -127,10 +127,51 @@
     }
     #warn-line.visible { display: block; }
 
-    /* ── Status bar removed ── */
+    /* ── Question title bar ────────────────────────────────────────────────── */
+    #q-title-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      font-size: 10px;
+      font-family: inherit;
+      color: rgba(0,0,0,0.35);
+      background: rgba(255,255,255,0.85);
+      z-index: 100;
+      pointer-events: none;
+      user-select: none;
+      letter-spacing: 0.03em;
+    }
+    #q-title-bar.debug-mode {
+      color: #1565C0;
+      background: rgba(21,101,192,0.07);
+    }
+    #q-title-bar.debug-mode #debug-pill {
+      display: inline-block;
+    }
+    #debug-pill {
+      display: none;
+      background: #1565C0;
+      color: #fff;
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 9px;
+      letter-spacing: 0.05em;
+    }
+    /* Offset panes so title bar doesn't cover first line */
+    #pane-wrapper { padding-top: 20px; height: calc(100vh - 20px); }
   </style>
 </head>
 <body>
+
+  <!-- Slim title bar -->
+  <div id="q-title-bar">
+    <span id="q-title-text">Sotti — Waiting…</span>
+    <span id="debug-pill">📸 DEBUG MODE</span>
+  </div>
 
   <div id="pane-wrapper">
     <!-- Left / primary pane -->
@@ -162,6 +203,16 @@
     const codeRight       = document.getElementById('code-right');
     const warnLine        = document.getElementById('warn-line');
     const placeholderText = document.getElementById('placeholder-text');
+    const qTitleBar       = document.getElementById('q-title-bar');
+    const qTitleText      = document.getElementById('q-title-text');
+
+    function setTitle(title) {
+      if (title) qTitleText.textContent = title;
+    }
+    function setDebugMode(active) {
+      if (active) qTitleBar.classList.add('debug-mode');
+      else        qTitleBar.classList.remove('debug-mode');
+    }
 
     let currentRawCode = '';
 
@@ -365,22 +416,25 @@
     // ── Inject code ───────────────────────────────────────────────────────────
     function injectCode(block, hint, unverified, isOcr) {
       currentRawCode = block;
-
       warnLine.style.color = '';
 
       if (isOcr) {
-        warnLine.textContent = 'ℹ OCR COMPLETE — Generating Solution...\n';
+        warnLine.textContent = 'ℹ OCR COMPLETE — Generating Solution…\n';
         warnLine.style.color = '#1565C0';
         warnLine.classList.add('visible');
+        setDebugMode(false);
       } else if (unverified) {
         warnLine.textContent = '⚠ UNVERIFIED — compilation not confirmed\n';
         warnLine.classList.add('visible');
+        setDebugMode(true);  // solution ready, debug mode armed
       } else {
         warnLine.textContent = '';
         warnLine.classList.remove('visible');
+        setDebugMode(true);  // verified solution — debug mode armed
       }
 
       paneLeft.classList.remove('idle');
+      if (placeholderText) placeholderText.textContent = '';
       requestAnimationFrame(() => requestAnimationFrame(autoFitText));
     }
 
@@ -402,25 +456,34 @@
       switch (data.type) {
         case 'init':
           if (data.state && data.state.current) injectCode(data.state.current, null, false);
+          if (data.state && data.state.current_question_title) setTitle(data.state.current_question_title);
           break;
         case 'solution': {
-          const unverified = typeof data.hint === 'string' && data.hint.startsWith('WARNING:');
+          const unverified = typeof data.hint === 'string' &&
+                             (data.hint.startsWith('WARNING:') || data.hint.startsWith('⚠'));
           injectCode(data.block || '', data.hint, unverified);
           break;
         }
         case 'ocr': {
+          // data.title may be present now
+          if (data.title) setTitle(data.title);
           injectCode(data.block || '', null, false, true);
           break;
         }
         case 'status':
-          if (placeholderText) placeholderText.innerText = data.message || '';
+          if (placeholderText) placeholderText.textContent = data.message || '';
+          // Detecting debug analysis in flight
+          if (data.message && data.message.toLowerCase().includes('debug')) {
+            setDebugMode(true);
+          }
           break;
         case 'error':
-          warnLine.style.color = '';
+          warnLine.style.color = '#d32f2f';
           warnLine.textContent = '⚠ Error: ' + (data.message || 'Unknown error') + '\n';
           warnLine.classList.add('visible');
           paneLeft.classList.remove('idle');
-          if (placeholderText) placeholderText.innerText = 'Error occurred.';
+          if (placeholderText) placeholderText.textContent = 'Error occurred.';
+          setDebugMode(false);
           requestAnimationFrame(() => requestAnimationFrame(autoFitText));
           break;
         default: break;

@@ -38,30 +38,22 @@ class Vehicle {
     public Vehicle(String n) {
         name = n;
     }
-    public void display() {
-        System.out.println("This is a generic vehicle.");
-    }
-    public String getName() {
-        return name;
-    }
+    // Define method display
+    public void display(){System.out.println("This is a generic vehicle.");}
+    // Define an accessor method
+    public String getName(){return name;}
 }
 
+// Define class Car
 class Car extends Vehicle {
-    public Car(String name) {
-        super(name);
-    }
-    public void display() {
-        System.out.println("This is a car named " + getName() + ".");
-    }
+    Car(String n){super(n);}
+    public void display(){System.out.println("This is a car named "+getName()+".");}
 }
 
+// Define class Bicycle
 class Bicycle extends Vehicle {
-    public Bicycle(String name) {
-        super(name);
-    }
-    public void display() {
-        System.out.println("This is a bicycle named " + getName() + ".");
-    }
+    Bicycle(String n){super(n);}
+    public void display(){System.out.println("This is a bicycle named "+getName()+".");}
 }
 
 public class Q3_DispatchExample {

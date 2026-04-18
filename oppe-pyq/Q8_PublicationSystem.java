@@ -38,14 +38,9 @@ class Author {
     private String name;
     private String[] books;
 
-    public Author(String name, String[] books) {
-        this.name = name;
-        this.books = Arrays.copyOf(books, books.length);
-    }
-
-    public Author(Author other) {
-        this(other.name, other.books);
-    }
+    //***** Define constructor(s) here
+    Author(String n,String[] b){name=n;books=b.clone();}
+    Author(Author a){this(a.name,a.books);}
 
     public void setName(String n) {
         name = n;
