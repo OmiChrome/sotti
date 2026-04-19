@@ -1,4 +1,4 @@
-# Practice Programming Assignment 2
+# Second Dose Vaccination Eligibility
 
 ## Problem Statement
 A school is planning for a second Covid-19 vaccination drive on 30/03/2022, for students who have already taken the first dose. A student is eligible for the second dose if 28 days have passed since the first dose. Write a Java program to find the list of students who are eligible for the second dose, based on the date of their first dose. Note that you must use the Stream class.
@@ -55,7 +55,7 @@ class Student{
 
 //Define method isEmpty(Stream<Student>)
 //that helps customizing output message
-public class SecondDose {
+public class SecondDose{
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
         int roll_num;

@@ -40,15 +40,13 @@
       font-family: 'Fira Code', 'Consolas', monospace;
     }
 
-    /* ── Main container — full viewport, 4px vertical padding ──────── */
+    /* ── Main container — full viewport, tight padding ──────────────── */
     #main {
       width: 100vw;
       height: 100vh;
-      padding: 100px 18px;
+      padding: 28px 14px 10px;  /* top leaves room for fixed status bar */
       overflow-y: auto;
       overflow-x: hidden;
-      /* Reserve bottom-right for GMeet PIP: ~180x130px on mobile */
-      padding-bottom: 10px;
     }
 
     /* ── PIP guard — invisible block at bottom-right corner ────────── */
@@ -64,15 +62,22 @@
       /* background: rgba(255,0,0,0.15); */
     }
 
-    /* ── Status bar — thin top strip ───────────────────────────────── */
+    /* ── Status bar — fixed thin top strip, always visible ────────── */
     #status-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 22px;
       font-size: 11px;
       color: #6c7086;
-      padding: 2px 0;
+      padding: 4px 14px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      flex-shrink: 0;
+      background: #1e1e2e;
+      border-bottom: 1px solid #313244;
+      z-index: 50;
     }
 
     #status-bar.connected {
@@ -94,8 +99,8 @@
       white-space: pre-wrap;
       word-break: break-word;
       font-family: 'Fira Code', 'Consolas', monospace;
-      font-size: 13px;
-      line-height: 1.45;
+      font-size: 16px;     /* readable in landscape on 6-inch phone */
+      line-height: 1.4;
       color: #cdd6f4;
       tab-size: 4;
     }

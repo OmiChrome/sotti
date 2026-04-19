@@ -1,0 +1,14 @@
+THINKING: MEDIUM
+
+1. **What to implement:**
+   - `Student.isEligible()`: Calculate the difference in days between `dose_two` and `dose_one` using `(dose_two.getTime() - dose_one.getTime()) / (1000 * 60 * 60 * 24)`. Return `true` if the difference is `>= 28`.
+   - `StudentList.getEligibleList(List<Student> list)`: Return `list.stream().filter(Student::isEligible)`.
+   - `StudentList.isEmpty(Stream<Student> stream)`: Use `stream.findAny().isEmpty()` to check if the stream contains no elements.
+
+2. **Most similar PYQ:**
+   - Similar to `Q4_FClass.java` and `Q11_FClassMaps.java` in terms of filtering collections, but specifically requires Java Streams and Date arithmetic.
+
+3. **Key edge cases:**
+   - Exactly 28 days difference (should be eligible).
+   - Negative difference (first dose after 30/03/2022, should be ineligible).
+   - Empty list of students (should print "There are no eligible students").

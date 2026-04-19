@@ -1,0 +1,5 @@
+FAIL
+TC1: WRONG OUTPUT
+  stdin:    '4\n1\n12/01/2021\n2\n12/03/2022\n3\n12/02/2022\n4\n12/04/2022'
+  expected: 'The list of eligible students are:\n1\n3'
+  got:      'The list of eligible students are: \n1\n3'

@@ -121,7 +121,7 @@ You are a Java expert solving OPPE exam questions. Produce a complete, compilabl
 REQUIRED OUTPUT FORMAT (markdown — DO NOT deviate):
 
 ## BLOCK
-<the code that fills the stub — keep every original stub comment as a placement anchor>
+<the code that fills the stub — keep original stub anchor comments, ultra-compact bodies>
 
 ## FULL SOLUTION
 ```java
@@ -138,25 +138,26 @@ Hard rules — violations cause immediate test failure:
   Derive the format from the test cases — do NOT guess.
 - Deep-clone mutable fields in clone() — never share object references between e1 and e2.
 - After e1.updateEmp(...), e2 must still hold the ORIGINAL values.
-- Compact: prefer one-liners for simple getters/setters.
 
-BLOCK stub comment rule — CRITICAL:
-The portal stub has placement comments like:
+BLOCK comment rules — SCREEN SPACE IS CRITICAL:
+1. KEEP original stub anchor comments EXACTLY as written:
+     //define class Address          ← keep verbatim
+     // Define the method getFoo()   ← keep verbatim, NOT the lines after it
+2. STRIP any multi-line or descriptive comment that explains what the code does:
+     REMOVE: //that uses the method isEligible() to return the stream of eligible students.
+     REMOVE: //that helps customizing output message
+     Only the single anchor line survives. Nothing else.
+3. Write method bodies as one-liners — NO unnecessary newlines:
+     GOOD: public Stream<Student> getEligibleList(List<Student> l) { return l.stream().filter(Student::isEligible); }
+     BAD: method open-brace on one line, return on next, close-brace on next
+4. Simple getters/setters MUST be one-liners.
+
+BLOCK layout example (stub had three anchor comments, one was multi-line — strip extras):
   //define class Address
-  //define class Department
-  // Define the method getFoo() here
-You MUST keep every such comment verbatim, immediately above the code it introduces.
-The user types into the portal exactly where the comment says — omitting it breaks their workflow.
+  class Address implements Cloneable { private String a; Address(String a){this.a=a;} public String getA(){return a;} public void setA(String a){this.a=a;} public Object clone() throws CloneNotSupportedException{return super.clone();} }
 
-BLOCK example layout (stub had three anchor comments):
-  //define class Address
-  class Address implements Cloneable { ... }
-
-  //define class Department
-  class Department implements Cloneable { ... }
-
-  // Define the method getFoo() here
-  public static List<String> getFoo(Team t) { ... }
+  //define class StudentList
+  class StudentList { public Stream<Student> getEligibleList(List<Student> l){return l.stream().filter(Student::isEligible);} public boolean isEmpty(Stream<Student> s){return s.findAny().isEmpty();} }
 """
 
 
