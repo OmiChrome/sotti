@@ -1,13 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport"
-    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <title>Sotti — Java Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Sotti</title>
 
-  <!-- PWA & Mobile Web App Meta Tags -->
+  <!-- PWA -->
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#1e1e2e" />
   <meta name="mobile-web-app-capable" content="yes" />
@@ -15,412 +13,263 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Sotti" />
 
-  <!-- Fira Code from Google Fonts -->
+  <!-- Font -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap" rel="stylesheet" />
 
   <style>
-    /* ── Reset ──────────────────────────────────────────────────────── */
-    *,
-    *::before,
-    *::after {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    html,
-    body {
-      width: 100vw;
-      height: 100vh;
+    html, body {
+      /* 100dvh = dynamic viewport height — excludes browser chrome on mobile */
+      width: 100dvw;
+      height: 100dvh;
       overflow: hidden;
       background: #1e1e2e;
       color: #cdd6f4;
       font-family: 'Fira Code', 'Consolas', monospace;
     }
 
-    /* ── Main container — full viewport, tight padding ──────────────── */
+    /* ── Scrollable code area ─────────────────────────────────────────── */
     #main {
-      width: 100vw;
-      height: 100vh;
-      padding: 28px 14px 10px;  /* top leaves room for fixed status bar */
+      width: 100%;
+      /* Fill full dynamic viewport. padding-bottom gives clearance so the
+         last line of code is never hidden behind the status pill or PIP. */
+      height: 100dvh;
+      padding: 6px 14px 56px; /* 56px bottom > pip-guard(40px) + status pill */
       overflow-y: auto;
       overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
     }
 
-    /* ── PIP guard — invisible block at bottom-right corner ────────── */
-    #pip-guard {
-      position: fixed;
-      bottom: 0;
-      right: 0;
-      width: 180px;
-      height: 130px;
-      pointer-events: none;
-      z-index: 100;
-      /* Debug: uncomment to see the zone */
-      /* background: rgba(255,0,0,0.15); */
-    }
-
-    /* ── Status bar — fixed thin top strip, always visible ────────── */
-    #status-bar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 22px;
-      font-size: 11px;
-      color: #6c7086;
-      padding: 4px 14px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      background: #1e1e2e;
-      border-bottom: 1px solid #313244;
-      z-index: 50;
-    }
-
-    #status-bar.connected {
-      color: #a6e3a1;
-    }
-
-    #status-bar.error {
-      color: #f38ba8;
-    }
-
-    /* ── Code display ──────────────────────────────────────────────── */
+    /* ── Code block ───────────────────────────────────────────────────── */
     .code-pre {
       display: block;
       width: 100%;
-      margin: 0;
-      padding: 0;
       background: transparent;
       border: none;
       white-space: pre-wrap;
       word-break: break-word;
-      font-family: 'Fira Code', 'Consolas', monospace;
-      font-size: 16px;     /* readable in landscape on 6-inch phone */
-      line-height: 1.4;
+      font-family: inherit;
+      font-size: 16px;
+      line-height: 1.45;
       color: #cdd6f4;
       tab-size: 4;
     }
 
-    /* ── Java syntax colours (Catppuccin Mocha inspired) ───────────── */
-    .k {
-      color: #cba6f7;
-      font-weight: bold;
-    }
-
-    /* keyword — mauve     */
-    .s {
-      color: #a6e3a1;
-    }
-
-    /* string  — green     */
-    .t {
-      color: #f9e2af;
-      font-weight: bold;
-    }
-
-    /* type    — yellow    */
-    .c {
-      color: #6c7086;
-      font-style: italic;
-    }
-
-    /* comment — overlay0  */
-    .n {
-      color: #fab387;
-    }
-
-    /* number  — peach     */
-    .a {
-      color: #89b4fa;
-    }
-
-    /* annotation — blue   */
-
-    /* ── Warn line ─────────────────────────────────────────────────── */
+    /* ── Warn / OCR banner ────────────────────────────────────────────── */
     #warn-line {
       display: none;
-      color: #f38ba8;
-      font-weight: bold;
-      font-family: inherit;
       font-size: 12px;
+      font-weight: bold;
+      color: #f38ba8;
       white-space: pre-wrap;
-      margin-bottom: 2px;
+      margin-bottom: 4px;
     }
+    #warn-line.visible { display: block; }
+    #warn-line.info    { color: #89b4fa; }
 
-    #warn-line.visible {
-      display: block;
+    /* ── Status pill — bottom-right, compact ─────────────────────────── */
+    #status-pill {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      font-size: 10px;
+      color: #45475a;
+      background: transparent;
+      pointer-events: none;
+      z-index: 90;
+      /* keep it away from PIP area: PIP is 180×130, pill is tiny */
+      max-width: 90px;
+      text-align: right;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+    #status-pill.connected { color: #a6e3a1; }
+    #status-pill.error     { color: #f38ba8; }
+    #status-pill.busy      { color: #f9e2af; }
 
-    #warn-line.info {
-      color: #89b4fa;
-    }
-
-    /* ── Idle cursor ───────────────────────────────────────────────── */
+    /* ── Idle cursor blink ────────────────────────────────────────────── */
     #main.idle .code-pre::after {
       content: '▍';
       animation: blink 1s step-end infinite;
       color: #cba6f7;
     }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
 
-    @keyframes blink {
-
-      0%,
-      100% {
-        opacity: 1;
-      }
-
-      50% {
-        opacity: 0;
-      }
-    }
-
-    /* ── Question title separator ──────────────────────────────────── */
-    .q-title {
-      color: #89b4fa;
-      font-weight: bold;
-      font-size: 12px;
-      padding: 6px 0 2px 0;
-      border-top: 1px solid #313244;
-      margin-top: 8px;
-    }
-
-    .q-title:first-child {
-      margin-top: 0;
-      border-top: none;
-    }
+    /* ── Java syntax (Catppuccin Mocha) ──────────────────────────────── */
+    .k { color: #cba6f7; font-weight: bold; }  /* keyword   */
+    .s { color: #a6e3a1; }                      /* string    */
+    .t { color: #f9e2af; font-weight: bold; }  /* type      */
+    .c { color: #6c7086; font-style: italic; } /* comment   */
+    .n { color: #fab387; }                      /* number    */
+    .a { color: #89b4fa; }                      /* annotation*/
   </style>
 </head>
 
 <body>
-
-  <!-- PIP guard zone for GMeet picture-in-picture -->
-  <div id="pip-guard"></div>
-
   <div id="main" class="idle">
-    <div id="status-bar">Connecting…</div>
     <div id="warn-line" role="alert"></div>
     <pre id="code-display" class="code-pre">Waiting for Sotti…</pre>
   </div>
 
+  <!-- Bottom-right status pill — tiny, doesn't block code -->
+  <div id="status-pill">connecting</div>
+
   <script>
-    // ── DOM refs ─────────────────────────────────────────────────────
-    const mainEl = document.getElementById('main');
-    const statusBar = document.getElementById('status-bar');
-    const warnLine = document.getElementById('warn-line');
+    const mainEl      = document.getElementById('main');
+    const warnLine    = document.getElementById('warn-line');
     const codeDisplay = document.getElementById('code-display');
+    const pill        = document.getElementById('status-pill');
 
     let currentRawCode = '';
 
-    // ── Java tokeniser ──────────────────────────────────────────────
-    const JAVA_KEYWORDS = new Set([
-      'abstract', 'assert', 'boolean', 'break', 'byte', 'case', 'catch', 'char', 'class',
-      'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extends', 'final',
-      'finally', 'float', 'for', 'goto', 'if', 'implements', 'import', 'instanceof', 'int',
-      'interface', 'long', 'native', 'new', 'package', 'private', 'protected', 'public',
-      'return', 'short', 'static', 'strictfp', 'super', 'switch', 'synchronized', 'this',
-      'throw', 'throws', 'transient', 'try', 'var', 'void', 'volatile', 'while', 'record',
-      'sealed', 'permits', 'yield', 'null', 'true', 'false'
-    ]);
-
-    function escHtml(s) {
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // ── Pill helpers ────────────────────────────────────────────────────
+    function setPill(text, cls) {
+      pill.textContent = text;
+      pill.className = cls || '';
     }
 
-    function tokeniseJava(code) {
-      let out = '', i = 0;
-      const len = code.length;
-      while (i < len) {
-        // Single-line comment
-        if (code[i] === '/' && code[i + 1] === '/') {
-          const end = code.indexOf('\n', i);
-          const sl = end === -1 ? code.slice(i) : code.slice(i, end);
-          out += `<span class="c">${escHtml(sl)}</span>`; i += sl.length; continue;
+    // ── Java tokeniser ───────────────────────────────────────────────────
+    const KW = new Set([
+      'abstract','assert','boolean','break','byte','case','catch','char','class',
+      'const','continue','default','do','double','else','enum','extends','final',
+      'finally','float','for','goto','if','implements','import','instanceof','int',
+      'interface','long','native','new','package','private','protected','public',
+      'return','short','static','strictfp','super','switch','synchronized','this',
+      'throw','throws','transient','try','var','void','volatile','while','record',
+      'sealed','permits','yield','null','true','false'
+    ]);
+
+    function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    function tokenise(code) {
+      let out = '', i = 0; const n = code.length;
+      while (i < n) {
+        if (code[i]==='/'&&code[i+1]==='/') {
+          const e=code.indexOf('\n',i), sl=e===-1?code.slice(i):code.slice(i,e);
+          out+=`<span class="c">${esc(sl)}</span>`; i+=sl.length; continue;
         }
-        // Block comment
-        if (code[i] === '/' && code[i + 1] === '*') {
-          const end = code.indexOf('*/', i + 2);
-          const sl = end === -1 ? code.slice(i) : code.slice(i, end + 2);
-          out += `<span class="c">${escHtml(sl)}</span>`; i += sl.length; continue;
+        if (code[i]==='/'&&code[i+1]==='*') {
+          const e=code.indexOf('*/',i+2), sl=e===-1?code.slice(i):code.slice(i,e+2);
+          out+=`<span class="c">${esc(sl)}</span>`; i+=sl.length; continue;
         }
-        // String literal
-        if (code[i] === '"') {
-          let j = i + 1;
-          while (j < len) { if (code[j] === '\\') { j += 2; continue; } if (code[j] === '"') { j++; break; } j++; }
-          out += `<span class="s">${escHtml(code.slice(i, j))}</span>`; i = j; continue;
+        if (code[i]==='"') {
+          let j=i+1; while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==='"'){j++;break;}j++;}
+          out+=`<span class="s">${esc(code.slice(i,j))}</span>`; i=j; continue;
         }
-        // Char literal
-        if (code[i] === "'") {
-          let j = i + 1;
-          while (j < len) { if (code[j] === '\\') { j += 2; continue; } if (code[j] === "'") { j++; break; } j++; }
-          out += `<span class="s">${escHtml(code.slice(i, j))}</span>`; i = j; continue;
+        if (code[i]==="'") {
+          let j=i+1; while(j<n){if(code[j]==='\\'){j+=2;continue;}if(code[j]==="'"){j++;break;}j++;}
+          out+=`<span class="s">${esc(code.slice(i,j))}</span>`; i=j; continue;
         }
-        // Annotation
-        if (code[i] === '@') {
-          let j = i + 1; while (j < len && /\w/.test(code[j])) j++;
-          out += `<span class="a">${escHtml(code.slice(i, j))}</span>`; i = j; continue;
+        if (code[i]==='@') {
+          let j=i+1; while(j<n&&/\w/.test(code[j]))j++;
+          out+=`<span class="a">${esc(code.slice(i,j))}</span>`; i=j; continue;
         }
-        // Number literal
-        if (/[0-9]/.test(code[i]) && (i === 0 || /\W/.test(code[i - 1]))) {
-          let j = i; while (j < len && /[0-9._xXbBfFdDlL]/.test(code[j])) j++;
-          out += `<span class="n">${escHtml(code.slice(i, j))}</span>`; i = j; continue;
+        if (/[0-9]/.test(code[i])&&(i===0||/\W/.test(code[i-1]))) {
+          let j=i; while(j<n&&/[0-9._xXbBfFdDlL]/.test(code[j]))j++;
+          out+=`<span class="n">${esc(code.slice(i,j))}</span>`; i=j; continue;
         }
-        // Identifier
         if (/[a-zA-Z_$]/.test(code[i])) {
-          let j = i; while (j < len && /[\w$]/.test(code[j])) j++;
-          const word = code.slice(i, j);
-          if (JAVA_KEYWORDS.has(word)) {
-            out += `<span class="k">${escHtml(word)}</span>`;
-          } else if (/^[A-Z]/.test(word)) {
-            out += `<span class="t">${escHtml(word)}</span>`;
-          } else {
-            out += escHtml(word);
-          }
-          i = j; continue;
+          let j=i; while(j<n&&/[\w$]/.test(code[j]))j++;
+          const w=code.slice(i,j);
+          if (KW.has(w))      out+=`<span class="k">${esc(w)}</span>`;
+          else if(/^[A-Z]/.test(w)) out+=`<span class="t">${esc(w)}</span>`;
+          else                out+=esc(w);
+          i=j; continue;
         }
-        out += escHtml(code[i]); i++;
+        out+=esc(code[i]); i++;
       }
       return out;
     }
 
-    // ── Display code ────────────────────────────────────────────────
+    // ── Render ───────────────────────────────────────────────────────────
     function displayCode(code) {
       currentRawCode = code;
       mainEl.classList.remove('idle');
-      codeDisplay.innerHTML = tokeniseJava(code);
+      codeDisplay.innerHTML = tokenise(code);
     }
 
-    // ── Inject code from backend ────────────────────────────────────
     function injectCode(block, hint, unverified, isOcr) {
-      currentRawCode = block;
-      warnLine.style.color = '';
       warnLine.className = '';
-
       if (isOcr) {
-        warnLine.textContent = 'ℹ OCR COMPLETE — Generating Solution…';
+        warnLine.textContent = 'ℹ OCR done — generating…';
         warnLine.className = 'visible info';
       } else if (unverified) {
-        warnLine.textContent = '⚠ UNVERIFIED — compilation not confirmed';
+        warnLine.textContent = '⚠ Unverified';
         warnLine.className = 'visible';
       } else {
         warnLine.textContent = '';
-        warnLine.className = '';
       }
-
-      mainEl.classList.remove('idle');
       displayCode(block);
     }
 
-    // ── WebSocket handler ───────────────────────────────────────────
+    // ── WebSocket ────────────────────────────────────────────────────────
     function handleMessage(raw) {
       let data;
-      try { data = JSON.parse(raw); }
-      catch {
-        displayCode(raw);
-        return;
-      }
+      try { data = JSON.parse(raw); } catch { displayCode(raw); return; }
 
       switch (data.type) {
         case 'init':
-          if (data.state && data.state.current) {
-            injectCode(data.state.current, null, false);
-          }
+          if (data.state?.current) injectCode(data.state.current, null, false);
           break;
-
         case 'solution': {
-          const unverified = typeof data.hint === 'string' &&
+          const unv = typeof data.hint === 'string' &&
             (data.hint.startsWith('WARNING:') || data.hint.startsWith('⚠'));
-          injectCode(data.block || '', data.hint, unverified);
+          injectCode(data.block || '', data.hint, unv);
+          setPill('✓ done', 'connected');
           break;
         }
-
-        case 'ocr': {
+        case 'ocr':
           injectCode(data.block || '', null, false, true);
+          setPill('ocr…', 'busy');
           break;
-        }
-
         case 'status':
-          statusBar.textContent = data.message || '';
-          statusBar.className = '';
+          setPill(data.message || '', 'busy');
           break;
-
         case 'error':
-          warnLine.textContent = '⚠ ' + (data.message || 'Unknown error');
+          warnLine.textContent = '⚠ ' + (data.message || 'error');
           warnLine.className = 'visible';
-          statusBar.textContent = 'Error occurred';
-          statusBar.className = 'error';
+          setPill('err', 'error');
           mainEl.classList.remove('idle');
           break;
-
-        case 'ping':
-          break;
-
+        case 'ping': break;
         default: break;
       }
     }
 
-    // ── WebSocket with auto-reconnect ───────────────────────────────
     function connect() {
-      let wsUrl;
-      if (window.location.protocol === 'https:') {
-        const ip = prompt('Enter your local Sotti IPv4 address (e.g., 192.168.29.50):');
-        if (!ip) return;
-        wsUrl = `ws://${ip}:8000/ws`;
-      } else {
-        wsUrl = `ws://${window.location.host}/ws`;
-      }
-
+      const wsUrl = window.location.protocol === 'https:'
+        ? `wss://${window.location.host}/ws`
+        : `ws://${window.location.host}/ws`;
       const ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        statusBar.textContent = 'Connected';
-        statusBar.className = 'connected';
-      };
-
+      ws.onopen    = () => setPill('●', 'connected');
       ws.onmessage = (e) => handleMessage(e.data);
-
-      ws.onclose = () => {
-        statusBar.textContent = 'Reconnecting…';
-        statusBar.className = '';
-        setTimeout(connect, 3000);
-      };
-
-      ws.onerror = () => ws.close();
+      ws.onclose   = () => { setPill('…', ''); setTimeout(connect, 3000); };
+      ws.onerror   = () => ws.close();
     }
 
-    // ── Fetch existing solution from REST API ─────────────────────
+    // ── Fetch existing solution on load ──────────────────────────────────
     async function fetchSolution() {
       try {
-        const baseUrl = window.location.origin;
-        const resp = await fetch(`${baseUrl}/api/solution`);
-        const data = await resp.json();
-        if (data.available && data.block) {
-          injectCode(data.block, null, false);
-          if (data.title) {
-            statusBar.textContent = `✓ ${data.title}`;
-            statusBar.className = 'connected';
-          }
+        const r = await fetch('/api/solution');
+        const d = await r.json();
+        if (d.available && d.block) {
+          injectCode(d.block, null, false);
+          if (d.title) setPill('✓', 'connected');
         }
-      } catch (e) {
-        console.log('Could not fetch solution:', e);
-      }
+      } catch {}
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      connect();
-      // Fetch existing solution right away
       fetchSolution();
-      // Register Service Worker for PWA installability support
+      connect();
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('sw.js')
-          .then(() => console.log('Service Worker Registered'))
-          .catch(err => console.error('Service Worker Registration Failed:', err));
+        navigator.serviceWorker.register('sw.js').catch(() => {});
       }
     });
   </script>
 </body>
-
 </html>
