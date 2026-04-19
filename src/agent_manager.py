@@ -121,7 +121,7 @@ You are a Java expert solving OPPE exam questions. Produce a complete, compilabl
 REQUIRED OUTPUT FORMAT (markdown — DO NOT deviate):
 
 ## BLOCK
-<code that fills the stub placeholders ONLY — no surrounding class/method shell>
+<the code that fills the stub — keep every original stub comment as a placement anchor>
 
 ## FULL SOLUTION
 ```java
@@ -139,7 +139,26 @@ Hard rules — violations cause immediate test failure:
 - Deep-clone mutable fields in clone() — never share object references between e1 and e2.
 - After e1.updateEmp(...), e2 must still hold the ORIGINAL values.
 - Compact: prefer one-liners for simple getters/setters.
+
+BLOCK stub comment rule — CRITICAL:
+The portal stub has placement comments like:
+  //define class Address
+  //define class Department
+  // Define the method getFoo() here
+You MUST keep every such comment verbatim, immediately above the code it introduces.
+The user types into the portal exactly where the comment says — omitting it breaks their workflow.
+
+BLOCK example layout (stub had three anchor comments):
+  //define class Address
+  class Address implements Cloneable { ... }
+
+  //define class Department
+  class Department implements Cloneable { ... }
+
+  // Define the method getFoo() here
+  public static List<String> getFoo(Team t) { ... }
 """
+
 
 _CODE_FIX_PROMPT = """\
 Your solution failed verification. Fix ONLY the error below. Do NOT rewrite unrelated code.
@@ -576,15 +595,12 @@ def _phase_code_gen(
         if ok:
             verified = True
             last_hint = f"\u2713 Verified | {APP_STATE.get('current_question_title', '')} | {len(test_cases)} TC"
-            # Only write solution.md on verified pass, with placement hint comment
-            stub_match_md = re.search(r"```java\n(.*?)```", question_md, re.DOTALL)
-            stub_hint = stub_match_md.group(1).splitlines()[0].strip() if stub_match_md else ""
-            placement_comment = f"// Place this code where the stub says: {stub_hint}\n" if stub_hint else ""
+            # Block already contains original stub comments from prompt rule — write as-is
             (q_dir / "solution.md").write_text(
-                f"# Solution Block\n\n"
-                f"```java\n{placement_comment}{block}\n```\n",
+                f"# Solution Block\n\n```java\n{block}\n```\n",
                 encoding="utf-8",
             )
+
             break
         else:
             last_hint = output

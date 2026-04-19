@@ -135,52 +135,12 @@
     }
     #warn-line.visible { display: block; }
 
-    /* ── Question title bar ────────────────────────────────────────────────── */
-    #q-title-bar {
-      display: none;
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      height: 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 10px;
-      font-size: 10px;
-      font-family: inherit;
-      color: rgba(0,0,0,0.35);
-      background: rgba(255,255,255,0.85);
-      z-index: 100;
-      pointer-events: none;
-      user-select: none;
-      letter-spacing: 0.03em;
-    }
-    #q-title-bar.debug-mode {
-      color: #1565C0;
-      background: rgba(21,101,192,0.07);
-    }
-    #q-title-bar.debug-mode #debug-pill {
-      display: inline-block;
-    }
-    #debug-pill {
-      display: none;
-      background: #1565C0;
-      color: #fff;
-      border-radius: 3px;
-      padding: 1px 5px;
-      font-size: 9px;
-      letter-spacing: 0.05em;
-    }
     /* Offset panes so title bar doesn't cover first line */
-    /* #pane-wrapper { padding-top: 20px; height: calc(100vh - 20px); } */
   </style>
 </head>
 <body>
 
-  <!-- Slim title bar -->
-  <div id="q-title-bar">
-    <span id="q-title-text">Sotti — Waiting…</span>
-    <span id="debug-pill">📸 DEBUG MODE</span>
-  </div>
+
 
   <div id="pane-wrapper">
     <!-- Left / primary pane -->
@@ -199,8 +159,8 @@
     // ── Constants ────────────────────────────────────────────────────────────
     // Minimum readable font size (px) for a 6-inch phone held at reading distance.
     // Below this we switch to dual-pane mode instead of shrinking further.
-    const MIN_READABLE_PX = 8;
-    const MAX_FONT_PX     = 36;
+    const MIN_READABLE_PX = 14;
+    const MAX_FONT_PX     = 28;
     const CHAR_W_RATIO    = 0.605;   // Fira Code: char width ≈ 0.605 × fontSize
     const LINE_H_RATIO    = 1.5;     // line-height
 
@@ -212,16 +172,8 @@
     const codeRight       = document.getElementById('code-right');
     const warnLine        = document.getElementById('warn-line');
     const placeholderText = document.getElementById('placeholder-text');
-    const qTitleBar       = document.getElementById('q-title-bar');
-    const qTitleText      = document.getElementById('q-title-text');
-
-    function setTitle(title) {
-      if (title) qTitleText.textContent = title;
-    }
-    function setDebugMode(active) {
-      if (active) qTitleBar.classList.add('debug-mode');
-      else        qTitleBar.classList.remove('debug-mode');
-    }
+    function setTitle(title) {}
+    function setDebugMode(active) {}
 
     let currentRawCode = '';
 
@@ -516,7 +468,15 @@
       ws.onopen    = () => { if (placeholderText) placeholderText.innerText = 'Connected'; };
     }
 
-    document.addEventListener('DOMContentLoaded', connect);
+    document.addEventListener('DOMContentLoaded', () => {
+      connect();
+      // Register Service Worker for PWA installability support
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('sw.js')
+          .then(() => console.log('Service Worker Registered'))
+          .catch(err => console.error('Service Worker Registration Failed:', err));
+      }
+    });
   </script>
 </body>
 </html>

@@ -1,0 +1,12 @@
+THINKING: MEDIUM
+
+1. **Implementation Details:**
+   - **Address & Department:** Implement `Cloneable`. Add `String` field, constructor, accessors, and `public Object clone()` using `super.clone()`.
+   - **Person:** Implement `Cloneable`. Fields: `String name`, `Address addr`. Constructor, accessors, and `public Person clone()` performing a deep copy of `addr`.
+   - **Employee:** Extend `Person`, implement `Cloneable`. Field: `Department dept`. Constructor, accessors, `public Employee clone()` performing a deep copy of `dept`, and `updateEmp(String newAddr, String newDept)` to update the fields.
+   - **toString():** Override `toString()` in `Employee` to return `"name : addr : dept"`.
+
+2. **Similar PYQ:** Similar to deep cloning patterns in Java, though more complex due to nested object hierarchies.
+
+3. **Edge Cases:**
+   - Ensure `clone()` performs deep copies for `Address` and `Department` objects; otherwise, `e1` and `e2` will share references.
