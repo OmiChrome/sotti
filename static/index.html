@@ -1,13 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Sotti — Java Assistant</title>
 
   <!-- PWA & Mobile Web App Meta Tags -->
   <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#ffffff" />
+  <meta name="theme-color" content="#1e1e2e" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -19,177 +21,208 @@
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap" rel="stylesheet" />
 
   <style>
-    /* ── Reset ──────────────────────────────────────────────────────────── */
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* ── Reset ──────────────────────────────────────────────────────── */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
-    html, body {
+    html,
+    body {
       width: 100vw;
       height: 100vh;
       overflow: hidden;
-      background: #ffffff;
-      color: #000000;
-      font-family: 'Fira Code', 'Roboto Mono', 'Consolas', monospace;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      font-family: 'Fira Code', 'Consolas', monospace;
     }
 
-    /* ── Wrapper that holds one or two panes ─────────────────────────────
-       In single-pane mode: one full-width pane.
-       In dual-pane mode:   two 50 vw panes side by side.                  */
-    #pane-wrapper {
-      display: flex;
+    /* ── Main container — full viewport, 4px vertical padding ──────── */
+    #main {
       width: 100vw;
       height: 100vh;
-      overflow: hidden;
-      transition: none;
+      padding: 100px 18px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      /* Reserve bottom-right for GMeet PIP: ~180x130px on mobile */
+      padding-bottom: 10px;
     }
 
-    /* ── Each pane ───────────────────────────────────────────────────────  */
-    .pane {
-      height: 100%;
+    /* ── PIP guard — invisible block at bottom-right corner ────────── */
+    #pip-guard {
+      position: fixed;
+      bottom: 0;
+      right: 0;
+      width: 180px;
+      height: 130px;
+      pointer-events: none;
+      z-index: 100;
+      /* Debug: uncomment to see the zone */
+      /* background: rgba(255,0,0,0.15); */
+    }
+
+    /* ── Status bar — thin top strip ───────────────────────────────── */
+    #status-bar {
+      font-size: 11px;
+      color: #6c7086;
+      padding: 2px 0;
+      white-space: nowrap;
       overflow: hidden;
-      padding: 8px 12px;
+      text-overflow: ellipsis;
       flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
     }
 
-    /* Single-pane default: full width */
-    #pane-left  { width: 100vw; }
-    #pane-right { width: 50vw;  display: none; border-left: 2px solid #e0e0e0; }
-
-    /* Dual-pane mode activated by JS */
-    #pane-wrapper.dual #pane-left  { width: 50vw; }
-    #pane-wrapper.dual #pane-right { display: block; }
-
-    /* PIP-safe overlay (bottom-right corner of the right pane).
-       Covers ~34 % wide × 22 % tall — enough for a typical 320×180px PIP.  */
-    #pane-right { position: relative; }
-    #pane-right::after {
-      content: '';
-      position: absolute;
-      bottom: 0; right: 0;
-      width: 34%; height: 22%;
-      background: #ffffff;
-      z-index: 10;
-      pointer-events: none;
+    #status-bar.connected {
+      color: #a6e3a1;
     }
-    /* In single-pane mode the PIP corner is on the right pane which is hidden,
-       so the single pane itself needs a PIP clearance on its own bottom-right. */
-    #pane-left.pip-safe::after {
-      content: '';
-      position: absolute;
-      bottom: 0; right: 0;
-      width: 22%; height: 22%;
-      background: #ffffff;
-      z-index: 10;
-      pointer-events: none;
-    }
-    #pane-left { position: relative; }
 
-    /* ── Code pre inside each pane ──────────────────────────────────────── */
+    #status-bar.error {
+      color: #f38ba8;
+    }
+
+    /* ── Code display ──────────────────────────────────────────────── */
     .code-pre {
       display: block;
       width: 100%;
-      margin: 0; padding: 0;
+      margin: 0;
+      padding: 0;
       background: transparent;
       border: none;
       white-space: pre-wrap;
       word-break: break-word;
-      overflow: hidden;
-      font-family: 'Fira Code', 'Roboto Mono', 'Consolas', monospace;
-      font-size: 2rem;      /* default; overridden by autoFit */
-      line-height: 1.5;
-      color: #000000;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      color: #cdd6f4;
+      tab-size: 4;
     }
 
-    /* ── Java syntax token colours ───────────────────────────────────────  */
-    .k { color: #000080; font-weight: bold; }   /* keyword      */
-    .s { color: #006400; }                        /* string       */
-    .t { color: #4B0082; font-weight: bold; }   /* type/class   */
-    .c { color: #333333; font-style: italic; }  /* comment      */
-    .n { color: #8B4513; }                       /* number       */
-    .a { color: #1565C0; }                       /* annotation   */
-
-    /* ── Blinking cursor (idle) ─────────────────────────────────────────── */
-    #pane-left.idle::after {
-      content: '▍';
-      position: static;
-      display: inline-block;
-      animation: blink 1s step-end infinite;
-      color: #000080;
-      background: none;
-      width: auto; height: auto;
-    }
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50%       { opacity: 0; }
+    /* ── Java syntax colours (Catppuccin Mocha inspired) ───────────── */
+    .k {
+      color: #cba6f7;
+      font-weight: bold;
     }
 
-    /* ── Warn line ───────────────────────────────────────────────────────── */
+    /* keyword — mauve     */
+    .s {
+      color: #a6e3a1;
+    }
+
+    /* string  — green     */
+    .t {
+      color: #f9e2af;
+      font-weight: bold;
+    }
+
+    /* type    — yellow    */
+    .c {
+      color: #6c7086;
+      font-style: italic;
+    }
+
+    /* comment — overlay0  */
+    .n {
+      color: #fab387;
+    }
+
+    /* number  — peach     */
+    .a {
+      color: #89b4fa;
+    }
+
+    /* annotation — blue   */
+
+    /* ── Warn line ─────────────────────────────────────────────────── */
     #warn-line {
       display: none;
-      color: #d32f2f;
+      color: #f38ba8;
       font-weight: bold;
       font-family: inherit;
+      font-size: 12px;
       white-space: pre-wrap;
+      margin-bottom: 2px;
     }
-    #warn-line.visible { display: block; }
 
-    /* Offset panes so title bar doesn't cover first line */
+    #warn-line.visible {
+      display: block;
+    }
+
+    #warn-line.info {
+      color: #89b4fa;
+    }
+
+    /* ── Idle cursor ───────────────────────────────────────────────── */
+    #main.idle .code-pre::after {
+      content: '▍';
+      animation: blink 1s step-end infinite;
+      color: #cba6f7;
+    }
+
+    @keyframes blink {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0;
+      }
+    }
+
+    /* ── Question title separator ──────────────────────────────────── */
+    .q-title {
+      color: #89b4fa;
+      font-weight: bold;
+      font-size: 12px;
+      padding: 6px 0 2px 0;
+      border-top: 1px solid #313244;
+      margin-top: 8px;
+    }
+
+    .q-title:first-child {
+      margin-top: 0;
+      border-top: none;
+    }
   </style>
 </head>
+
 <body>
 
+  <!-- PIP guard zone for GMeet picture-in-picture -->
+  <div id="pip-guard"></div>
 
-
-  <div id="pane-wrapper">
-    <!-- Left / primary pane -->
-    <div id="pane-left" class="pane idle pip-safe">
-      <pre id="code-left" class="code-pre"><span id="warn-line" role="alert"></span><span id="placeholder-text">Waiting for Sotti…</span></pre>
-    </div>
-    <!-- Right / overflow pane (hidden until dual-pane is activated) -->
-    <div id="pane-right" class="pane">
-      <pre id="code-right" class="code-pre"></pre>
-    </div>
+  <div id="main" class="idle">
+    <div id="status-bar">Connecting…</div>
+    <div id="warn-line" role="alert"></div>
+    <pre id="code-display" class="code-pre">Waiting for Sotti…</pre>
   </div>
 
-
-
   <script>
-    // ── Constants ────────────────────────────────────────────────────────────
-    // Minimum readable font size (px) for a 6-inch phone held at reading distance.
-    // Below this we switch to dual-pane mode instead of shrinking further.
-    const MIN_READABLE_PX = 14;
-    const MAX_FONT_PX     = 28;
-    const CHAR_W_RATIO    = 0.605;   // Fira Code: char width ≈ 0.605 × fontSize
-    const LINE_H_RATIO    = 1.5;     // line-height
-
-    // ── DOM refs ─────────────────────────────────────────────────────────────
-    const wrapper         = document.getElementById('pane-wrapper');
-    const paneLeft        = document.getElementById('pane-left');
-    const paneRight       = document.getElementById('pane-right');
-    const codeLeft        = document.getElementById('code-left');
-    const codeRight       = document.getElementById('code-right');
-    const warnLine        = document.getElementById('warn-line');
-    const placeholderText = document.getElementById('placeholder-text');
-    function setTitle(title) {}
-    function setDebugMode(active) {}
+    // ── DOM refs ─────────────────────────────────────────────────────
+    const mainEl = document.getElementById('main');
+    const statusBar = document.getElementById('status-bar');
+    const warnLine = document.getElementById('warn-line');
+    const codeDisplay = document.getElementById('code-display');
 
     let currentRawCode = '';
 
-    // ── Java tokeniser ────────────────────────────────────────────────────────
+    // ── Java tokeniser ──────────────────────────────────────────────
     const JAVA_KEYWORDS = new Set([
-      'abstract','assert','boolean','break','byte','case','catch','char','class',
-      'const','continue','default','do','double','else','enum','extends','final',
-      'finally','float','for','goto','if','implements','import','instanceof','int',
-      'interface','long','native','new','package','private','protected','public',
-      'return','short','static','strictfp','super','switch','synchronized','this',
-      'throw','throws','transient','try','var','void','volatile','while','record',
-      'sealed','permits','yield','null','true','false'
+      'abstract', 'assert', 'boolean', 'break', 'byte', 'case', 'catch', 'char', 'class',
+      'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extends', 'final',
+      'finally', 'float', 'for', 'goto', 'if', 'implements', 'import', 'instanceof', 'int',
+      'interface', 'long', 'native', 'new', 'package', 'private', 'protected', 'public',
+      'return', 'short', 'static', 'strictfp', 'super', 'switch', 'synchronized', 'this',
+      'throw', 'throws', 'transient', 'try', 'var', 'void', 'volatile', 'while', 'record',
+      'sealed', 'permits', 'yield', 'null', 'true', 'false'
     ]);
 
     function escHtml(s) {
-      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     function tokeniseJava(code) {
@@ -197,43 +230,43 @@
       const len = code.length;
       while (i < len) {
         // Single-line comment
-        if (code[i]==='/' && code[i+1]==='/') {
+        if (code[i] === '/' && code[i + 1] === '/') {
           const end = code.indexOf('\n', i);
-          const sl  = end === -1 ? code.slice(i) : code.slice(i, end);
+          const sl = end === -1 ? code.slice(i) : code.slice(i, end);
           out += `<span class="c">${escHtml(sl)}</span>`; i += sl.length; continue;
         }
         // Block comment
-        if (code[i]==='/' && code[i+1]==='*') {
-          const end = code.indexOf('*/', i+2);
-          const sl  = end === -1 ? code.slice(i) : code.slice(i, end+2);
+        if (code[i] === '/' && code[i + 1] === '*') {
+          const end = code.indexOf('*/', i + 2);
+          const sl = end === -1 ? code.slice(i) : code.slice(i, end + 2);
           out += `<span class="c">${escHtml(sl)}</span>`; i += sl.length; continue;
         }
         // String literal
-        if (code[i]==='"') {
-          let j = i+1;
-          while (j<len) { if (code[j]==='\\'){j+=2;continue;} if(code[j]==='"'){j++;break;} j++; }
-          out += `<span class="s">${escHtml(code.slice(i,j))}</span>`; i=j; continue;
+        if (code[i] === '"') {
+          let j = i + 1;
+          while (j < len) { if (code[j] === '\\') { j += 2; continue; } if (code[j] === '"') { j++; break; } j++; }
+          out += `<span class="s">${escHtml(code.slice(i, j))}</span>`; i = j; continue;
         }
         // Char literal
-        if (code[i]==="'") {
-          let j = i+1;
-          while (j<len) { if (code[j]==='\\'){j+=2;continue;} if(code[j]==="'"){j++;break;} j++; }
-          out += `<span class="s">${escHtml(code.slice(i,j))}</span>`; i=j; continue;
+        if (code[i] === "'") {
+          let j = i + 1;
+          while (j < len) { if (code[j] === '\\') { j += 2; continue; } if (code[j] === "'") { j++; break; } j++; }
+          out += `<span class="s">${escHtml(code.slice(i, j))}</span>`; i = j; continue;
         }
         // Annotation
-        if (code[i]==='@') {
-          let j=i+1; while(j<len && /\w/.test(code[j])) j++;
-          out += `<span class="a">${escHtml(code.slice(i,j))}</span>`; i=j; continue;
+        if (code[i] === '@') {
+          let j = i + 1; while (j < len && /\w/.test(code[j])) j++;
+          out += `<span class="a">${escHtml(code.slice(i, j))}</span>`; i = j; continue;
         }
         // Number literal
-        if (/[0-9]/.test(code[i]) && (i===0 || /\W/.test(code[i-1]))) {
-          let j=i; while(j<len && /[0-9._xXbBfFdDlL]/.test(code[j])) j++;
-          out += `<span class="n">${escHtml(code.slice(i,j))}</span>`; i=j; continue;
+        if (/[0-9]/.test(code[i]) && (i === 0 || /\W/.test(code[i - 1]))) {
+          let j = i; while (j < len && /[0-9._xXbBfFdDlL]/.test(code[j])) j++;
+          out += `<span class="n">${escHtml(code.slice(i, j))}</span>`; i = j; continue;
         }
         // Identifier
         if (/[a-zA-Z_$]/.test(code[i])) {
-          let j=i; while(j<len && /[\w$]/.test(code[j])) j++;
-          const word = code.slice(i,j);
+          let j = i; while (j < len && /[\w$]/.test(code[j])) j++;
+          const word = code.slice(i, j);
           if (JAVA_KEYWORDS.has(word)) {
             out += `<span class="k">${escHtml(word)}</span>`;
           } else if (/^[A-Z]/.test(word)) {
@@ -241,217 +274,90 @@
           } else {
             out += escHtml(word);
           }
-          i=j; continue;
+          i = j; continue;
         }
         out += escHtml(code[i]); i++;
       }
       return out;
     }
 
-    // ── Layout helpers ────────────────────────────────────────────────────────
-
-    /** Estimate number of visual (wrapped) lines a raw text would occupy
-     *  at a given font size inside a pane of paneWidthPx. */
-    function countWrappedLines(rawLines, paneWidthPx, fontSize) {
-      const charW = fontSize * CHAR_W_RATIO;
-      const charsPerLine = Math.max(1, Math.floor((paneWidthPx - 24) / charW)); // 24 = 2×12px padding
-      let rows = 0;
-      for (const line of rawLines) {
-        rows += Math.max(1, Math.ceil(line.length / charsPerLine));
-      }
-      return rows;
+    // ── Display code ────────────────────────────────────────────────
+    function displayCode(code) {
+      currentRawCode = code;
+      mainEl.classList.remove('idle');
+      codeDisplay.innerHTML = tokeniseJava(code);
     }
 
-    /** Max lines that fit in a pane of paneHeightPx at fontSize. */
-    function linesPerPane(paneHeightPx, fontSize) {
-      return Math.max(1, Math.floor(paneHeightPx / (fontSize * LINE_H_RATIO)));
-    }
-
-    // ── Single-pane: binary-search largest font that fits ─────────────────────
-    function fitSinglePane(rawLines) {
-      const pH = paneLeft.clientHeight;
-      const pW = paneLeft.clientWidth;
-
-      let lo = MIN_READABLE_PX, hi = MAX_FONT_PX, best = MIN_READABLE_PX;
-      while (lo <= hi) {
-        const mid = Math.floor((lo + hi) / 2);
-        const totalRows = countWrappedLines(rawLines, pW, mid);
-        const maxRows   = linesPerPane(pH, mid);
-        if (totalRows <= maxRows) { best = mid; lo = mid + 1; }
-        else                      { hi  = mid - 1; }
-      }
-      return best;
-    }
-
-    // ── Dual-pane: binary-search largest font where left+right fit ────────────
-    function fitDualPane(rawLines) {
-      // Left pane is 50vw, right pane is 50vw (minus PIP overlay area)
-      const pH  = paneLeft.clientHeight;
-      const pW  = Math.floor(window.innerWidth * 0.5);
-      // Right pane: bottom 22 % × 34 % is blocked by PIP overlay; reduce effective height
-      const pHR = Math.floor(pH * 0.78);
-
-      let lo = MIN_READABLE_PX, hi = MAX_FONT_PX, bestFont = MIN_READABLE_PX, bestSplit = rawLines.length;
-      while (lo <= hi) {
-        const mid      = Math.floor((lo + hi) / 2);
-        const maxRowsL = linesPerPane(pH,  mid);
-        const maxRowsR = linesPerPane(pHR, mid);
-        // Find split index
-        let wrappedSoFar = 0, splitIdx = rawLines.length;
-        const charW = mid * CHAR_W_RATIO;
-        const cpl   = Math.max(1, Math.floor((pW - 24) / charW));
-        for (let li = 0; li < rawLines.length; li++) {
-          const rows = Math.max(1, Math.ceil(rawLines[li].length / cpl));
-          wrappedSoFar += rows;
-          if (wrappedSoFar > maxRowsL) { splitIdx = li; break; }
-        }
-        const rightLines = rawLines.slice(splitIdx);
-        const rightRows  = countWrappedLines(rightLines, pW, mid);
-        if (rightRows <= maxRowsR) { bestFont = mid; bestSplit = splitIdx; lo = mid + 1; }
-        else                       { hi = mid - 1; }
-      }
-      return { fontSize: bestFont, splitIdx: bestSplit };
-    }
-
-    // ── Activate / deactivate dual pane mode ──────────────────────────────────
-    function activateDual() {
-      wrapper.classList.add('dual');
-      paneLeft.classList.remove('pip-safe');  // PIP is on right pane in dual mode
-    }
-    function activateSingle() {
-      wrapper.classList.remove('dual');
-      paneLeft.classList.add('pip-safe');
-    }
-
-    // ── Main autoFit ──────────────────────────────────────────────────────────
-    // Algorithm:
-    //   1. Try to fit all code in a single pane by reducing font ≥ MIN_READABLE_PX.
-    //   2. If even MIN_READABLE_PX overflows single pane → activate dual pane.
-    //   3. In dual-pane mode, find largest font where left+right together fit.
-    function autoFitText() {
-      if (!currentRawCode) return;
-
-      const rawLines = currentRawCode.split('\n');
-
-      // ── Phase 1: try single pane ──────────────────────────────────────────
-      const singleFontPx = fitSinglePane(rawLines);
-
-      // Check if fits at MIN_READABLE_PX
-      const pH = paneLeft.clientHeight;
-      const pWFull = window.innerWidth;
-      const totalRowsAtMin = countWrappedLines(rawLines, pWFull, MIN_READABLE_PX);
-      const maxRowsAtMin   = linesPerPane(pH, MIN_READABLE_PX);
-
-      if (totalRowsAtMin <= maxRowsAtMin) {
-        // Code fits in one pane → use single
-        activateSingle();
-
-        // Force layout to settle so clientWidth is correct for single pane
-        requestAnimationFrame(() => {
-          codeLeft.style.fontSize  = singleFontPx + 'px';
-          codeLeft.style.lineHeight = LINE_H_RATIO;
-          codeLeft.innerHTML = warnLine.outerHTML + tokeniseJava(currentRawCode);
-          codeRight.innerHTML = '';
-        });
-      } else {
-        // ── Phase 2: go dual pane ───────────────────────────────────────────
-        activateDual();
-
-        requestAnimationFrame(() => {
-          const { fontSize, splitIdx } = fitDualPane(rawLines);
-
-          const leftLines  = rawLines.slice(0, splitIdx);
-          const rightLines = rawLines.slice(splitIdx);
-
-          codeLeft.style.fontSize   = fontSize + 'px';
-          codeRight.style.fontSize  = fontSize + 'px';
-          codeLeft.style.lineHeight  = LINE_H_RATIO;
-          codeRight.style.lineHeight = LINE_H_RATIO;
-
-          codeLeft.innerHTML  = warnLine.outerHTML + tokeniseJava(leftLines.join('\n'));
-          codeRight.innerHTML = rightLines.length ? tokeniseJava(rightLines.join('\n')) : '';
-        });
-      }
-    }
-
-    // ── Inject code ───────────────────────────────────────────────────────────
+    // ── Inject code from backend ────────────────────────────────────
     function injectCode(block, hint, unverified, isOcr) {
       currentRawCode = block;
       warnLine.style.color = '';
+      warnLine.className = '';
 
       if (isOcr) {
-        warnLine.textContent = 'ℹ OCR COMPLETE — Generating Solution…\n';
-        warnLine.style.color = '#1565C0';
-        warnLine.classList.add('visible');
-        setDebugMode(false);
+        warnLine.textContent = 'ℹ OCR COMPLETE — Generating Solution…';
+        warnLine.className = 'visible info';
       } else if (unverified) {
-        warnLine.textContent = '⚠ UNVERIFIED — compilation not confirmed\n';
-        warnLine.classList.add('visible');
-        setDebugMode(true);  // solution ready, debug mode armed
+        warnLine.textContent = '⚠ UNVERIFIED — compilation not confirmed';
+        warnLine.className = 'visible';
       } else {
         warnLine.textContent = '';
-        warnLine.classList.remove('visible');
-        setDebugMode(true);  // verified solution — debug mode armed
+        warnLine.className = '';
       }
 
-      paneLeft.classList.remove('idle');
-      if (placeholderText) placeholderText.textContent = '';
-      requestAnimationFrame(() => requestAnimationFrame(autoFitText));
+      mainEl.classList.remove('idle');
+      displayCode(block);
     }
 
-    window.addEventListener('resize', () => {
-      requestAnimationFrame(() => requestAnimationFrame(autoFitText));
-    });
-
-    // ── WebSocket handler ────────────────────────────────────────────────────
+    // ── WebSocket handler ───────────────────────────────────────────
     function handleMessage(raw) {
       let data;
       try { data = JSON.parse(raw); }
       catch {
-        currentRawCode = raw;
-        paneLeft.classList.remove('idle');
-        requestAnimationFrame(() => requestAnimationFrame(autoFitText));
+        displayCode(raw);
         return;
       }
 
       switch (data.type) {
         case 'init':
-          if (data.state && data.state.current) injectCode(data.state.current, null, false);
-          if (data.state && data.state.current_question_title) setTitle(data.state.current_question_title);
+          if (data.state && data.state.current) {
+            injectCode(data.state.current, null, false);
+          }
           break;
+
         case 'solution': {
           const unverified = typeof data.hint === 'string' &&
-                             (data.hint.startsWith('WARNING:') || data.hint.startsWith('⚠'));
+            (data.hint.startsWith('WARNING:') || data.hint.startsWith('⚠'));
           injectCode(data.block || '', data.hint, unverified);
           break;
         }
+
         case 'ocr': {
-          // data.title may be present now
-          if (data.title) setTitle(data.title);
           injectCode(data.block || '', null, false, true);
           break;
         }
+
         case 'status':
-          if (placeholderText) placeholderText.textContent = data.message || '';
-          // Detecting debug analysis in flight
-          if (data.message && data.message.toLowerCase().includes('debug')) {
-            setDebugMode(true);
-          }
+          statusBar.textContent = data.message || '';
+          statusBar.className = '';
           break;
+
         case 'error':
-          warnLine.style.color = '#d32f2f';
-          warnLine.textContent = '⚠ Error: ' + (data.message || 'Unknown error') + '\n';
-          warnLine.classList.add('visible');
-          paneLeft.classList.remove('idle');
-          if (placeholderText) placeholderText.textContent = 'Error occurred.';
-          setDebugMode(false);
-          requestAnimationFrame(() => requestAnimationFrame(autoFitText));
+          warnLine.textContent = '⚠ ' + (data.message || 'Unknown error');
+          warnLine.className = 'visible';
+          statusBar.textContent = 'Error occurred';
+          statusBar.className = 'error';
+          mainEl.classList.remove('idle');
           break;
+
+        case 'ping':
+          break;
+
         default: break;
       }
     }
 
-    // ── WebSocket with auto-reconnect ─────────────────────────────────────────
+    // ── WebSocket with auto-reconnect ───────────────────────────────
     function connect() {
       let wsUrl;
       if (window.location.protocol === 'https:') {
@@ -461,15 +367,47 @@
       } else {
         wsUrl = `ws://${window.location.host}/ws`;
       }
+
       const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        statusBar.textContent = 'Connected';
+        statusBar.className = 'connected';
+      };
+
       ws.onmessage = (e) => handleMessage(e.data);
-      ws.onclose   = () => { if (placeholderText) placeholderText.innerText = 'Reconnecting…'; setTimeout(connect, 3000); };
-      ws.onerror   = () => ws.close();
-      ws.onopen    = () => { if (placeholderText) placeholderText.innerText = 'Connected'; };
+
+      ws.onclose = () => {
+        statusBar.textContent = 'Reconnecting…';
+        statusBar.className = '';
+        setTimeout(connect, 3000);
+      };
+
+      ws.onerror = () => ws.close();
+    }
+
+    // ── Fetch existing solution from REST API ─────────────────────
+    async function fetchSolution() {
+      try {
+        const baseUrl = window.location.origin;
+        const resp = await fetch(`${baseUrl}/api/solution`);
+        const data = await resp.json();
+        if (data.available && data.block) {
+          injectCode(data.block, null, false);
+          if (data.title) {
+            statusBar.textContent = `✓ ${data.title}`;
+            statusBar.className = 'connected';
+          }
+        }
+      } catch (e) {
+        console.log('Could not fetch solution:', e);
+      }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       connect();
+      // Fetch existing solution right away
+      fetchSolution();
       // Register Service Worker for PWA installability support
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('sw.js')
@@ -479,4 +417,5 @@
     });
   </script>
 </body>
+
 </html>

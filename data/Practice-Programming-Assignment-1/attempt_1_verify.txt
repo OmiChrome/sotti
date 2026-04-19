@@ -1,2 +1,0 @@
-PASS
-All 2 test case(s) passed.

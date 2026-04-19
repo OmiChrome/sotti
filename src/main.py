@@ -95,6 +95,26 @@ async def root():
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
+@app.get("/api/solution")
+async def get_solution():
+    """Return current solution.md content if available for the active question."""
+    from fastapi.responses import JSONResponse
+    q_dir_str = APP_STATE.get("current_question_dir")
+    if not q_dir_str:
+        return JSONResponse({"available": False, "block": ""})
+    q_dir = Path(q_dir_str)
+    solution_path = q_dir / "solution.md"
+    if not solution_path.exists():
+        return JSONResponse({"available": False, "block": ""})
+    import re as _re
+    content = solution_path.read_text(encoding="utf-8")
+    # Extract java block from solution.md
+    m = _re.search(r"```java\n(.*?)```", content, _re.DOTALL)
+    block = m.group(1).strip() if m else content
+    title = APP_STATE.get("current_question_title", "")
+    return JSONResponse({"available": True, "block": block, "title": title})
+
+
 # ---------------------------------------------------------------------------
 # WebSocket — code push channel
 # ---------------------------------------------------------------------------
