@@ -145,14 +145,31 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+_WS_PING_INTERVAL = 20  # seconds — keeps connection alive through proxies & mobile networks
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket) -> None:
     await manager.connect(ws)
+
+    async def _ping_loop() -> None:
+        """Send a ping frame every N seconds to prevent idle timeout drops."""
+        while True:
+            await asyncio.sleep(_WS_PING_INTERVAL)
+            try:
+                await ws.send_json({"type": "ping"})
+            except Exception:
+                break  # connection gone; let the main loop handle cleanup
+
+    ping_task = asyncio.create_task(_ping_loop())
     try:
         while True:
-            # Server is push-only; keep the connection alive.
+            # Server is push-only; drain any client frames (pong, etc.)
             await ws.receive_text()
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        ping_task.cancel()
         manager.disconnect(ws)
 
 

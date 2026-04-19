@@ -77,16 +77,23 @@ Rules:
 _ORCHESTRATOR_NEW_PROMPT = """\
 You are an orchestrator for a Java exam assistant.
 
-You will receive a question.md file. Your job: write a SHORT, direct instruction for the CODE_MODEL.
+You receive a question.md. Output a SHORT instruction for CODE_MODEL.
 
-Tell it:
-1. What to implement (be specific — method signatures, class names, return types)
-2. Which previous year question it most resembles (if any) from the PYQ list below
-3. Any tricky edge cases from the test cases
+FIRST LINE must be exactly one of:
+THINKING: MEDIUM
+THINKING: LOW
 
-Be concise. No code. Max 150 words.
+Use MEDIUM for questions requiring full class design / inheritance / complex logic.
+Use LOW for simple single-method or straightforward implementations.
 
---- PREVIOUS YEAR QUESTIONS (for reference) ---
+Then write (max 150 words total):
+1. What to implement (class names, method signatures, return types)
+2. Most similar PYQ (if any)
+3. Key edge cases from test cases
+
+No code.
+
+--- PREVIOUS YEAR QUESTIONS ---
 {pyq_context}
 """
 
@@ -111,30 +118,41 @@ Reply with exactly one word: NEW or DEBUG
 _CODE_MODEL_PROMPT = """\
 You are a Java expert solving OPPE exam questions. Produce a complete, compilable Java solution.
 
-REQUIRED OUTPUT FORMAT (markdown, no deviation):
+REQUIRED OUTPUT FORMAT (markdown — DO NOT deviate):
 
 ## BLOCK
-<code that fills the stub placeholder ONLY — no surrounding class/method shell>
+<code that fills the stub placeholders ONLY — no surrounding class/method shell>
 
 ## FULL SOLUTION
 ```java
-<complete compilable Java file, class named Solution, runs with `java Solution.java`>
+<complete compilable Java file, public class named Solution, all helpers non-public>
 ```
 
-Rules:
-- Output ONLY this markdown. No explanation, no extra text.
-- FULL SOLUTION must compile+run with `java Solution.java` (Java 11+).
-- Match test case output exactly (spacing, punctuation, newlines).
-- Compact code: one-liners, inline where readable.
+Hard rules — violations cause immediate test failure:
+- Output ONLY the two markdown sections above. No explanation, no extra text.
+- Compile + run: `java Solution.java` (Java 11+ single-file launcher).
+- public class MUST be `Solution`. ALL other classes must NOT be public.
+- Read EXACTLY as many tokens as the stub does — no more, no fewer.
+  sc.next() reads one whitespace-delimited token. Newlines in stdin are whitespace.
+- toString() / print format must EXACTLY match expected output (spacing, colon, comma, order).
+  Derive the format from the test cases — do NOT guess.
+- Deep-clone mutable fields in clone() — never share object references between e1 and e2.
+- After e1.updateEmp(...), e2 must still hold the ORIGINAL values.
+- Compact: prefer one-liners for simple getters/setters.
 """
 
 _CODE_FIX_PROMPT = """\
-Your solution failed verification. Fix ONLY the error below.
+Your solution failed verification. Fix ONLY the error below. Do NOT rewrite unrelated code.
 
 Error:
 {error}
 
-Output the same markdown format:
+Common causes:
+- NoSuchElementException → you read more tokens than stdin provides. Count sc.next() calls.
+- WRONG OUTPUT field order → re-read the toString() format from the expected output above.
+- Clone not deep enough → addr and dept objects still shared after clone().
+
+Output the SAME markdown format:
 ## BLOCK
 <fixed stub code>
 
@@ -166,12 +184,66 @@ def _get_client(use_fallback: bool = False) -> genai.Client:
     return _client
 
 
-def _call(model: str, contents: list, system: str, json_out: bool = False, temperature: float = 0.1) -> str:
-    """Call Gemini with automatic fallback on rate-limit errors."""
+# ---------------------------------------------------------------------------
+# Thinking level resolution
+#
+# Abstract intents (used throughout this file):
+#   None          → no thinking at all (OCR — fastest path)
+#   "FAST"        → quick computation  (gemma: MINIMAL | gemini: LOW)
+#   "CAREFUL"     → thorough reasoning (gemma: HIGH    | gemini: MEDIUM)
+#
+# "HIGH" for gemini is never used — takes 135s+; cap is MEDIUM.
+# ---------------------------------------------------------------------------
+
+_THINKING_OFF     = None       # OCR only
+_THINKING_FAST    = "FAST"     # debug re-runs, simple fixes
+_THINKING_CAREFUL = "CAREFUL"  # orchestrator + code gen default
+
+# Sentinel for "never use HIGH on gemini" — maps to CAREFUL at most
+_THINKING_HIGH = "HIGH"  # kept for gemma compatibility only
+
+
+def _resolve_thinking(model: str, intent: str | None) -> str | None:
+    """
+    Map abstract intent to the correct API string for the given model family.
+
+    Gemma (gemma-*):  supports MINIMAL and HIGH only.
+    Gemini (gemini-*): supports LOW, MEDIUM, HIGH — we cap at MEDIUM.
+    """
+    if intent is None:
+        return None
+    is_gemma = model.lower().startswith("gemma")
+    if is_gemma:
+        # Gemma API: MINIMAL (fast) or HIGH (thorough) — nothing else
+        return "HIGH" if intent in ("CAREFUL", "HIGH") else "MINIMAL"
+    else:
+        # Gemini API: LOW (fast) or MEDIUM (thorough); avoid HIGH (too slow)
+        return "LOW" if intent in ("FAST",) else "MEDIUM"
+
+
+def _call(
+    model: str,
+    contents: list,
+    system: str,
+    json_out: bool = False,
+    temperature: float = 0.1,
+    thinking_intent: str | None = _THINKING_OFF,
+) -> str:
+    """Call Gemini/Gemma. AFC disabled. thinking_intent resolved per model family."""
+    resolved = _resolve_thinking(model, thinking_intent)
+    thinking_cfg = (
+        types.ThinkingConfig(thinking_level=resolved)
+        if resolved is not None
+        else None
+    )
+    if resolved:
+        log.debug("[CALL] %s | thinking=%s (intent=%s)", model, resolved, thinking_intent)
     cfg = types.GenerateContentConfig(
         system_instruction=system,
         response_mime_type="application/json" if json_out else "text/plain",
         temperature=temperature,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        thinking_config=thinking_cfg,
     )
     for use_fb in (False, True):
         try:
@@ -270,10 +342,9 @@ def _phase_ocr(image_paths: list[str], broadcast: BroadcastFn | None) -> tuple[s
     title_match = re.search(r"^#\s+(.+)", raw, re.MULTILINE)
     title = title_match.group(1).strip() if title_match else "question"
 
-    # Write question.md
+    # Write question.md (single source of truth — no duplicate ocr_raw.txt)
     q_dir = _question_dir(title)
     (q_dir / "question.md").write_text(raw, encoding="utf-8")
-    (q_dir / "ocr_raw.txt").write_text(raw, encoding="utf-8")
     log.info("[OCR] Wrote question.md → %s", q_dir)
 
     # Update global state
@@ -297,11 +368,19 @@ def _phase_ocr(image_paths: list[str], broadcast: BroadcastFn | None) -> tuple[s
 # Phase B — Orchestrator (new question path)
 # ---------------------------------------------------------------------------
 
-def _phase_orchestrate_new(question_md: str) -> str:
+def _phase_orchestrate_new(question_md: str, broadcast: BroadcastFn | None = None) -> str:
     """Returns orchestrator instructions for CODE_MODEL."""
     t0 = time.monotonic()
+    _emit(broadcast, {"type": "status", "message": "Orchestrator thinking… (MEDIUM)"})
+    log.info("[ORCH] calling model with MEDIUM thinking")
     system = _ORCHESTRATOR_NEW_PROMPT.format(pyq_context=_PYQ_CONTEXT)
-    result = _call(settings.orchestrator_model, [question_md], system, json_out=False, temperature=0.1)
+    result = _call(
+        settings.orchestrator_model,
+        [question_md],
+        system,
+        thinking_intent=_THINKING_CAREFUL,
+        temperature=0.1,
+    )
     log.info("[ORCH] instructions ready in %.1fs", time.monotonic() - t0)
     return result
 
@@ -369,8 +448,22 @@ def _parse_code_response(raw: str) -> tuple[str, str]:
     return block, full_file
 
 
+def _normalise_cell(cell: str) -> str:
+    """
+    Clean a markdown table cell value:
+    - <br>, <br/>, <BR> → newline (exam portal uses these for multiline input)
+    - literal \n escape → newline
+    - strip surrounding whitespace
+    """
+    cell = re.sub(r"<br\s*/?>", "\n", cell, flags=re.IGNORECASE)
+    cell = cell.replace("\\n", "\n")
+    return cell.strip()
+
+
 def _parse_test_cases(question_md: str) -> list[dict]:
-    """Extract test cases from question.md table."""
+    """Extract test cases from question.md markdown table.
+    Handles <br> separators in both input and expected_output columns.
+    """
     cases: list[dict] = []
     in_table = False
     for line in question_md.splitlines():
@@ -383,8 +476,8 @@ def _parse_test_cases(question_md: str) -> list[dict]:
             cols = [c.strip() for c in line.strip("|").split("|")]
             if len(cols) >= 3:
                 cases.append({
-                    "input": cols[1].replace("\\n", "\n"),
-                    "expected_output": cols[2].replace("\\n", "\n"),
+                    "input": _normalise_cell(cols[1]),
+                    "expected_output": _normalise_cell(cols[2]),
                 })
         elif in_table:
             break
@@ -405,6 +498,18 @@ def _phase_code_gen(
     test_cases = _parse_test_cases(question_md)
     log.info("[CODE] %d test case(s) extracted", len(test_cases))
 
+    # Determine thinking intent from orchestrator's first-line hint
+    # Orchestrator emits THINKING: MEDIUM (→ CAREFUL) or THINKING: LOW (→ FAST)
+    # Debug re-runs always use FAST
+    thinking_intent = _THINKING_FAST if extra_context else _THINKING_CAREFUL
+    first_line = orch_instructions.splitlines()[0].strip().upper() if orch_instructions else ""
+    if "THINKING: MEDIUM" in first_line or "THINKING: CAREFUL" in first_line:
+        thinking_intent = _THINKING_CAREFUL
+    elif "THINKING: LOW" in first_line or "THINKING: FAST" in first_line:
+        thinking_intent = _THINKING_FAST
+    # Never escalate to HIGH on gemini; resolver handles gemma HIGH automatically
+    log.info("[CODE] thinking_intent=%s", thinking_intent)
+
     user_msg = (
         f"## Question\n{question_md}\n\n"
         f"## Orchestrator Instructions\n{orch_instructions}\n"
@@ -419,8 +524,9 @@ def _phase_code_gen(
     verified = False
 
     for attempt in range(1, _MAX_RETRIES + 1):
-        _emit(broadcast, {"type": "status", "message": f"Code gen {attempt}/{_MAX_RETRIES}…"})
-        log.info("[CODE] attempt %d/%d", attempt, _MAX_RETRIES)
+        msg = f"Code gen attempt {attempt}/{_MAX_RETRIES} ({thinking_intent} thinking)…"
+        _emit(broadcast, {"type": "status", "message": msg})
+        log.info("[CODE] attempt %d/%d | thinking=%s", attempt, _MAX_RETRIES, thinking_intent)
         t_a = time.monotonic()
 
         prompt = user_msg if attempt == 1 else _CODE_FIX_PROMPT.format(error=last_hint[:600])
@@ -429,7 +535,13 @@ def _phase_code_gen(
         ]
 
         try:
-            raw = _call(settings.code_model, current, _CODE_MODEL_PROMPT, json_out=False, temperature=0.1)
+            raw = _call(
+                settings.code_model,
+                current,
+                _CODE_MODEL_PROMPT,
+                temperature=0.1,
+                thinking_intent=thinking_intent,
+            )
         except Exception as e:
             log.warning("[CODE] API error attempt %d: %s", attempt, e)
             last_hint = str(e)
@@ -450,11 +562,8 @@ def _phase_code_gen(
 
         last_block = block
 
-        # Write files: full_solution.java (for `java` runner) and solution.md (block for portal)
-        (q_dir / "full_solution.java").write_text(full_file, encoding="utf-8")
-        (q_dir / "solution.md").write_text(
-            f"# Solution Block\n\n```java\n{block}\n```\n", encoding="utf-8"
-        )
+        # Write Solution.java (verifier will run: java Solution.java)
+        (q_dir / "Solution.java").write_text(full_file, encoding="utf-8")
 
         # Verify with java command
         t_v = time.monotonic()
@@ -467,6 +576,15 @@ def _phase_code_gen(
         if ok:
             verified = True
             last_hint = f"\u2713 Verified | {APP_STATE.get('current_question_title', '')} | {len(test_cases)} TC"
+            # Only write solution.md on verified pass, with placement hint comment
+            stub_match_md = re.search(r"```java\n(.*?)```", question_md, re.DOTALL)
+            stub_hint = stub_match_md.group(1).splitlines()[0].strip() if stub_match_md else ""
+            placement_comment = f"// Place this code where the stub says: {stub_hint}\n" if stub_hint else ""
+            (q_dir / "solution.md").write_text(
+                f"# Solution Block\n\n"
+                f"```java\n{placement_comment}{block}\n```\n",
+                encoding="utf-8",
+            )
             break
         else:
             last_hint = output
@@ -533,8 +651,8 @@ def generate_and_verify_solution(
             return None
 
     # Phase B
-    _emit(broadcast, {"type": "status", "message": "Orchestrating…"})
-    orch_instructions = _phase_orchestrate_new(question_md)
+    _emit(broadcast, {"type": "status", "message": "Orchestrator analysing question…"})
+    orch_instructions = _phase_orchestrate_new(question_md, broadcast)
     (q_dir / "orchestrator_plan.txt").write_text(orch_instructions, encoding="utf-8")
 
     # Phase C

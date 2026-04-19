@@ -19,7 +19,7 @@ def verify_java_code(
     test_cases: list[dict] | None = None,
 ) -> tuple[bool, str]:
     """
-    Write full_code to <work_dir>/full_solution.java, run with `java full_solution.java`.
+    Write full_code to <work_dir>/Solution.java, run with `java Solution.java`.
 
     If test_cases provided: each case is fed as stdin, stdout compared to expected_output.
 
@@ -31,7 +31,7 @@ def verify_java_code(
         work_dir = Path(__file__).resolve().parent.parent / "tmp"
 
     work_dir.mkdir(parents=True, exist_ok=True)
-    solution_file = work_dir / "full_solution.java"
+    solution_file = work_dir / "Solution.java"   # capital-S must match `public class Solution`
     solution_file.write_text(full_code, encoding="utf-8")
     log.info("Verifier: wrote %d chars → %s", len(full_code), solution_file)
 
@@ -97,5 +97,4 @@ def verify_java_code(
         log.warning("Verifier: %d/%d FAILED", len(failures), len(test_cases))
         return False, report
 
-    log.info("Verifier: ALL %d test cases PASSED.", len(test_cases))
     return True, f"All {len(test_cases)} test case(s) passed."

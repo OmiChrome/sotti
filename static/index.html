@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Sotti — Java Assistant</title>
+
+  <!-- PWA & Mobile Web App Meta Tags -->
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#ffffff" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Sotti" />
 
   <!-- Fira Code from Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -129,6 +137,7 @@
 
     /* ── Question title bar ────────────────────────────────────────────────── */
     #q-title-bar {
+      display: none;
       position: fixed;
       top: 0; left: 0; right: 0;
       height: 20px;
@@ -162,7 +171,7 @@
       letter-spacing: 0.05em;
     }
     /* Offset panes so title bar doesn't cover first line */
-    #pane-wrapper { padding-top: 20px; height: calc(100vh - 20px); }
+    /* #pane-wrapper { padding-top: 20px; height: calc(100vh - 20px); } */
   </style>
 </head>
 <body>
@@ -190,8 +199,8 @@
     // ── Constants ────────────────────────────────────────────────────────────
     // Minimum readable font size (px) for a 6-inch phone held at reading distance.
     // Below this we switch to dual-pane mode instead of shrinking further.
-    const MIN_READABLE_PX = 14;
-    const MAX_FONT_PX     = 64;
+    const MIN_READABLE_PX = 8;
+    const MAX_FONT_PX     = 36;
     const CHAR_W_RATIO    = 0.605;   // Fira Code: char width ≈ 0.605 × fontSize
     const LINE_H_RATIO    = 1.5;     // line-height
 
